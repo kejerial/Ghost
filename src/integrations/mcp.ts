@@ -105,11 +105,30 @@ export class Connections {
     return this.loading;
   }
 
-  /** Open the sign-in page for a connection in the browser on this Mac, and wait for it to finish. */
-  async login(name: string): Promise<boolean> {
+  /**
+   * Run `codex mcp login`, which opens the sign-in page in the browser on this Mac.
+   * `onUrl` receives the sign-in link as soon as Codex prints it, so Ghost can also post it.
+   * Resolves when the login finishes or times out (5 minutes).
+   */
+  async login(name: string, onUrl?: (url: string) => void): Promise<boolean> {
     await this.refresh();
     if (!this.loginable.includes(name)) throw new Error(`"${name}" is not a connection that supports login`);
-    const result = await this.exec("codex", ["mcp", "login", name], LOGIN_TIMEOUT_MS);
+    let seen = false;
+    const onOutput = (chunk: string) => {
+      const url = /https:\/\/[^\s"'<>]+/.exec(chunk)?.[0];
+      if (url && !seen) {
+        seen = true;
+        onUrl?.(url);
+      }
+    };
+    const run = this.options.run ?? runProcess;
+    const result = await run("codex", ["mcp", "login", name], {
+      stdin: "",
+      cwd: modelSandboxDir(),
+      env: childEnv(),
+      timeoutMs: LOGIN_TIMEOUT_MS,
+      onOutput,
+    }).catch(() => undefined);
     await this.refresh(true);
     return result?.code === 0 && this.servers.some((s) => s.name === name);
   }

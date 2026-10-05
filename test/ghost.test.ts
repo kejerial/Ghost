@@ -179,6 +179,41 @@ describe("Ghost.handleMention", () => {
     expect(prompt).toMatch(/<asker_time timezone="America\/New_York">/);
   });
 
+  it("opens a needed login without asking, posts the sign-in link, then answers again", async () => {
+    let call = 0;
+    const backend = new FakeBackend(() =>
+      ++call === 1 ? "Opening the granola sign-in now.\n<<connect: granola>>" : "Your last meeting was the Lin pilot sync.",
+    );
+    const { slack, ghost } = await workspace(backend);
+    const logins: string[] = [];
+    let loggedIn: () => void = () => undefined;
+    const done = new Promise<void>((resolve) => (loggedIn = resolve));
+    (ghost as unknown as { deps: GhostDeps }).deps.connections = {
+      servers: [],
+      needsLogin: ["granola"],
+      refresh: async () => undefined,
+      login: async (name: string, onUrl?: (url: string) => void) => {
+        logins.push(name);
+        onUrl?.("https://granola.test/oauth?state=abc");
+        setTimeout(loggedIn, 0);
+        return true;
+      },
+    } as unknown as GhostDeps["connections"];
+
+    const ts = tsDaysAgo(0);
+    await ghost.handleMention({ channel: "CGEN", ts, user: "UK", text: "what was my last granola meeting?" }, "channel");
+    await done;
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(logins).toEqual(["granola"]);
+    expect(slack.posts.map((p) => p.text)).toEqual([
+      "Opening the granola sign-in now.",
+      "🔑 <https://granola.test/oauth?state=abc|Sign in to granola>. The page should also be open in your browser on your Mac.",
+      "Your last meeting was the Lin pilot sync.",
+    ]);
+    expect(backend.requests[0]!.prompt).toContain("Needs login: granola");
+  });
+
   it("scheduled task runs strip directives but do not apply them", async () => {
     const at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const backend = new FakeBackend(`Summary.\n<<schedule: {"kind":"task","text":"again","at":"${at}"}>>\n<<remember: x y z>>`);

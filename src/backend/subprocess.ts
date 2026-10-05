@@ -15,6 +15,8 @@ export interface RunOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
+  /** Called with each stdout and stderr chunk as it arrives. */
+  onOutput?: (chunk: string) => void;
 }
 
 export type Runner = (command: string, args: string[], options: RunOptions) => Promise<RunResult>;
@@ -32,8 +34,14 @@ export const runProcess: Runner = (command, args, options) =>
       setTimeout(() => child.kill("SIGKILL"), 5000).unref();
     }, options.timeoutMs);
 
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      stdout += chunk;
+      options.onOutput?.(chunk);
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+      options.onOutput?.(chunk);
+    });
     child.on("error", (error) => {
       clearTimeout(timer);
       reject(error);

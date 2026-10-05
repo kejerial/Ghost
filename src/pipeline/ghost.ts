@@ -51,6 +51,8 @@ export interface Answer {
   text: string;
   sourceCount: number;
   citedCount: number;
+  /** Connections the model asked to log in to. The caller starts the logins after it posts the answer. */
+  logins: string[];
 }
 
 export class Ghost {
@@ -92,6 +94,7 @@ export class Ghost {
       const started = Date.now();
       const answer = await this.answer(event, question);
       await api.post(event.channel, replyThreadTs, answer.text);
+      for (const name of answer.logins) void this.loginThenAnswer(name, event, question, replyThreadTs);
       log.info("answered", {
         channel: event.channel,
         ts: event.ts,
@@ -109,8 +112,8 @@ export class Ghost {
     }
   }
 
-  /** Gather context, call the model, and render the reply. Separate from Slack posting so `npm run ask` can reuse it. */
   /**
+   * Gather context, call the model, and render the reply. Separate from Slack posting so `npm run ask` can reuse it.
    * `applyDirectives: false` is for scheduled task runs: they must not create more schedules or
    * change memory. Directives are still removed from the text.
    */
@@ -160,16 +163,23 @@ export class Ghost {
       backend.complete({ system: built.system, prompt: built.prompt, timeoutMs: this.deps.modelTimeoutMs }),
     );
     const { text, directives } = extractDirectives(raw);
-    const notes = event.user && options.applyDirectives !== false ? await this.apply(directives, { userId: event.user, name: askerName, channelId: event.channel, tz: timezone ?? "UTC" }) : [];
+    const { notes, logins } =
+      event.user && options.applyDirectives !== false
+        ? await this.apply(directives, { userId: event.user, name: askerName, channelId: event.channel, tz: timezone ?? "UTC" })
+        : { notes: [], logins: [] };
     const rendered = renderAnswer(text, built.sources);
     const footer = notes.length ? `\n\n${notes.map((n) => `_${n}_`).join("\n")}` : "";
-    return { text: rendered.text + footer, sourceCount: built.sources.length, citedCount: rendered.cited };
+    return { text: rendered.text + footer, sourceCount: built.sources.length, citedCount: rendered.cited, logins };
   }
 
   /** Apply the model's directives for this user. Returns notes for anything that failed. */
-  private async apply(directives: Directive[], who: { userId: string; name: string; channelId: string; tz: string }): Promise<string[]> {
+  private async apply(
+    directives: Directive[],
+    who: { userId: string; name: string; channelId: string; tz: string },
+  ): Promise<{ notes: string[]; logins: string[] }> {
     const { profiles, scheduler } = this.deps;
     const notes: string[] = [];
+    const logins: string[] = [];
     for (const d of directives) {
       try {
         if (d.type === "remember") profiles.remember(who.userId, who.name, d.text);
@@ -180,7 +190,7 @@ export class Ghost {
           log.info("schedule created", { id: created.id, kind: created.kind, nextRun: new Date(created.nextRun).toISOString(), cron: created.cron });
         } else if (d.type === "connect") {
           if (!this.deps.connections) throw new Error("connections are off");
-          void this.connect(d.name, who.channelId);
+          logins.push(d.name);
         } else if (d.type === "cancel") {
           if (!(await scheduler?.cancel(who.userId, d.id))) notes.push(`⚠️ I couldn't find schedule #${d.id}.`);
         } else {
@@ -192,21 +202,41 @@ export class Ghost {
         notes.push(`⚠️ I couldn't set that up: ${error instanceof Error ? error.message : String(error)}.`);
       }
     }
-    return notes;
+    return { notes, logins: [...new Set(logins)] };
   }
 
-  /** Run the sign-in for a connection, then report the result in the channel. */
-  private async connect(name: string, channelId: string): Promise<void> {
-    let message: string;
+  /**
+   * Open the sign-in page for a connection on this Mac. When the user finishes, answer the
+   * original question again with the new connection, in the same place as the first reply.
+   */
+  private async loginThenAnswer(name: string, event: MentionEvent, question: string, replyThreadTs: string | undefined): Promise<void> {
+    const { api, connections } = this.deps;
+    log.info("connection login started", { name });
+    let ok = false;
     try {
-      log.info("connection login started", { name });
-      const ok = await this.deps.connections!.login(name);
-      message = ok ? `✅ ${name} is connected. Ask me again and I'll use it.` : `⚠️ The ${name} login didn't finish. Say "connect ${name}" to try again.`;
+      ok = await connections!.login(name, (url) => {
+        void api
+          .post(event.channel, replyThreadTs, `🔑 <${url}|Sign in to ${name}>. The page should also be open in your browser on your Mac.`)
+          .catch(() => undefined);
+      });
     } catch (error) {
-      message = `⚠️ I couldn't start the ${name} login: ${error instanceof Error ? error.message : String(error)}.`;
+      log.warn("connection login failed", { name, ...errorFields(error) });
     }
-    log.info("connection login finished", { name, message });
-    await this.deps.api.post(channelId, undefined, message).catch((error) => log.warn("connect post failed", errorFields(error)));
+    log.info("connection login finished", { name, ok });
+    if (!ok) {
+      await api.post(event.channel, replyThreadTs, `⚠️ The ${name} login didn't finish. Ask again and I'll reopen it.`).catch(() => undefined);
+      return;
+    }
+    await api.addReaction(event.channel, event.ts, WORKING_REACTION).catch(() => undefined);
+    try {
+      const retry = await this.answer(event, question);
+      await api.post(event.channel, replyThreadTs, retry.text);
+    } catch (error) {
+      log.error("answer after login failed", { name, ...errorFields(error) });
+      await api.post(event.channel, replyThreadTs, `✅ ${name} is connected, but my answer failed. Ask again.`).catch(() => undefined);
+    } finally {
+      await api.removeReaction(event.channel, event.ts, WORKING_REACTION).catch(() => undefined);
+    }
   }
 
   /** Draft a profile from the user's own indexed messages, once, in the background. */
