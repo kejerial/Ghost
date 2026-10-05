@@ -179,6 +179,16 @@ describe("Ghost.handleMention", () => {
     expect(prompt).toMatch(/<asker_time timezone="America\/New_York">/);
   });
 
+  it("scheduled task runs strip directives but do not apply them", async () => {
+    const at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const backend = new FakeBackend(`Summary.\n<<schedule: {"kind":"task","text":"again","at":"${at}"}>>\n<<remember: x y z>>`);
+    const { slack, ghost, profiles } = await workspace(backend);
+    const answer = await ghost.answer({ channel: "CGEN", ts: tsDaysAgo(0), user: "UK", text: "Summarize" }, "Summarize", { applyDirectives: false });
+    expect(answer.text).toBe("Summary.");
+    expect(slack.scheduled).toHaveLength(0);
+    expect(profiles.read("UK") ?? "").not.toContain("x y z");
+  });
+
   it("home channel: ignores empty messages instead of posting help", async () => {
     const backend = new FakeBackend("ok");
     const { slack, ghost } = await workspace(backend);

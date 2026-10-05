@@ -156,8 +156,22 @@ export class Connections {
 
 /** Env values that every model call needs for its connections. */
 export function mcpEnv(servers: McpServer[]): Record<string, string> {
-  return Object.assign({}, ...servers.map((s) => s.env ?? {}));
+  const env: Record<string, string> = {};
+  for (const s of servers) {
+    for (const [key, value] of Object.entries(s.env ?? {})) {
+      // The model CLI shares this environment: never let a connection change it, or another connection's secret.
+      if (PROTECTED_ENV.has(key)) continue;
+      if (key in env && env[key] !== value) {
+        log.warn("connection env var conflict; keeping the first value", { key, server: s.name });
+        continue;
+      }
+      env[key] = value;
+    }
+  }
+  return env;
 }
+
+const PROTECTED_ENV = new Set(["PATH", "HOME", "USER", "SHELL", "TMPDIR", "CODEX_HOME", "NODE_OPTIONS"]);
 
 const toml = (value: unknown) => JSON.stringify(value);
 
@@ -180,10 +194,12 @@ export function codexMcpArgs(servers: McpServer[]): string[] {
   return args;
 }
 
-/** `claude --mcp-config` JSON. Secrets use ${VAR} expansion from the environment. */
+/** `claude --mcp-config` JSON. Secrets use ${VAR} expansion from the environment. Skips Codex OAuth servers. */
 export function claudeMcpConfig(servers: McpServer[]): string {
   const mcpServers: Record<string, unknown> = {};
   for (const s of servers) {
+    // Codex OAuth logins live in the Codex credential store; Claude cannot use them.
+    if (s.type === "http" && !s.bearerEnvVar) continue;
     if (s.type === "http") {
       mcpServers[s.name] = {
         type: "http",

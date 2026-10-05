@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { extractDirectives } from "../src/pipeline/directives.js";
 import { claudeMcpConfig, codexMcpArgs, Connections, fromCodexList, mcpEnv } from "../src/integrations/mcp.js";
 import { localTime } from "../src/pipeline/prompt.js";
-import { Scheduler, nextCron } from "../src/schedule/scheduler.js";
+import { Scheduler, nextCron, parseLocalTime } from "../src/schedule/scheduler.js";
 import { FakeSlack, memoryStore, tempProfiles } from "./fakes.js";
 
 describe("extractDirectives", () => {
@@ -182,5 +182,106 @@ describe("Connections login", () => {
   it("parses the connect directive", () => {
     expect(extractDirectives("Opening it now.\n<<connect: linear>>").directives).toEqual([{ type: "connect", name: "linear" }]);
     expect(extractDirectives("<<connect: ../evil>>").directives[0]).toMatchObject({ type: "invalid" });
+  });
+});
+
+describe("review fixes", () => {
+  const who = { userId: "UK", channelId: "C1", tz: "America/New_York" };
+  const start = Date.parse("2026-10-05T12:00:00Z");
+
+  class SlowSlack extends FakeSlack {
+    fail = false;
+    override async scheduleMessage(channel: string, postAt: number, text: string): Promise<string> {
+      await new Promise((r) => setTimeout(r, 20));
+      if (this.fail) throw new Error("ratelimited");
+      return super.scheduleMessage(channel, postAt, text);
+    }
+  }
+
+  it("1: a tick during create() does not queue the reminder twice", async () => {
+    const slack = new SlowSlack();
+    const scheduler = new Scheduler(memoryStore().db, slack, async () => "", () => start);
+    await Promise.all([
+      scheduler.create({ kind: "reminder", text: "x", at: "2026-10-06T09:00" }, who),
+      new Promise((r) => setTimeout(r, 5)).then(() => scheduler.tick()),
+    ]);
+    expect(slack.scheduled).toHaveLength(1);
+  });
+
+  it("2: a failed Slack schedule leaves no row behind", async () => {
+    const slack = new SlowSlack();
+    slack.fail = true;
+    const scheduler = new Scheduler(memoryStore().db, slack, async () => "", () => start);
+    await expect(scheduler.create({ kind: "reminder", text: "x", at: "2026-10-06T09:00" }, who)).rejects.toThrow("ratelimited");
+    slack.fail = false;
+    await scheduler.tick();
+    expect(slack.scheduled).toHaveLength(0);
+    expect(scheduler.list("UK")).toHaveLength(0);
+  });
+
+  it("3: a task cancelled while an earlier task runs does not run", async () => {
+    const slack = new FakeSlack();
+    slack.addChannel("C1", "kevin");
+    let now = start;
+    const ran: string[] = [];
+    let bId = 0;
+    const scheduler: Scheduler = new Scheduler(memoryStore().db, slack, async (s) => {
+      ran.push(s.text);
+      if (s.text === "A") await scheduler.cancel("UK", bId);
+      return "ok";
+    }, () => now);
+    await scheduler.create({ kind: "task", text: "A", at: "2026-10-05T08:01" }, who);
+    bId = (await scheduler.create({ kind: "task", text: "B", at: "2026-10-05T08:02" }, who)).id;
+    now += 10 * 60_000;
+    await scheduler.tick();
+    expect(ran).toEqual(["A"]);
+  });
+
+  it("4: local times keep their hour across a DST change", async () => {
+    const slack = new FakeSlack();
+    const scheduler = new Scheduler(memoryStore().db, slack, async () => "", () => start);
+    await scheduler.create({ kind: "reminder", text: "x", at: "2026-11-10T09:00" }, who); // EST after Nov 1
+    expect(slack.scheduled[0]!.postAt).toBe(Date.parse("2026-11-10T14:00:00Z") / 1000);
+    expect(parseLocalTime("2026-10-06T09:00", "America/New_York")).toBe(Date.parse("2026-10-06T13:00:00Z"));
+    expect(parseLocalTime("2026-10-06T09:00:00-04:00", "Asia/Seoul")).toBe(Date.parse("2026-10-06T13:00:00Z"));
+    expect(parseLocalTime("next tuesday", "UTC")).toBeNaN();
+  });
+
+  it("6: the prompt copy of a long profile keeps the newest memories", () => {
+    const profiles = tempProfiles();
+    profiles.writeProfile("UK", "Kevin", "x".repeat(4000));
+    for (let i = 0; i < 80; i++) profiles.remember("UK", "Kevin", `memory number ${i} with some extra words`);
+    const text = profiles.read("UK")!;
+    expect(text).toContain("memory number 79");
+    expect(text.length).toBeLessThanOrEqual(6100);
+  });
+
+  it("7: forget matches memory text only, and ignores very short phrases", () => {
+    const profiles = tempProfiles();
+    profiles.remember("UK", "Kevin", "likes tea", new Date("2026-10-05T12:00:00Z"));
+    profiles.remember("UK", "Kevin", "likes coffee", new Date("2026-10-05T12:00:00Z"));
+    expect(profiles.forget("UK", "10-05")).toBe(0);
+    expect(profiles.forget("UK", "li")).toBe(0);
+    expect(profiles.forget("UK", "coffee")).toBe(1);
+    expect(profiles.read("UK")).toContain("likes tea");
+  });
+
+  it("8: '>>' inside a directive value does not cut it short", () => {
+    const { text, directives } = extractDirectives('Set.\n<<schedule: {"kind":"task","text":"check a >> b","at":"2026-10-06T09:00"}>>');
+    expect(text).toBe("Set.");
+    expect(directives[0]).toMatchObject({ type: "schedule", spec: { text: "check a >> b" } });
+  });
+
+  it("9: connection env vars cannot override the CLI's env or each other", () => {
+    const env = mcpEnv([
+      { name: "a", type: "stdio", command: "a", env: { API_KEY: "one", PATH: "/evil" } },
+      { name: "b", type: "stdio", command: "b", env: { API_KEY: "two" } },
+    ]);
+    expect(env).toEqual({ API_KEY: "one" });
+  });
+
+  it("10: the Claude config skips Codex OAuth servers it cannot authenticate", () => {
+    const config = JSON.parse(claudeMcpConfig([{ name: "apollo", type: "http", url: "https://mcp.apollo.io/mcp" }]));
+    expect(config.mcpServers).toEqual({});
   });
 });

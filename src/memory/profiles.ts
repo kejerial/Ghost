@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 const MEMORIES = "## Memories";
 const MAX_PROMPT_CHARS = 6000;
+const MAX_MEMORY_CHARS = 3000;
+const MIN_FORGET_CHARS = 3;
 
 /**
  * One editable Markdown file per Slack user: `data/profiles/<USER_ID>.md`.
@@ -26,7 +28,18 @@ export class Profiles {
   read(userId: string): string | undefined {
     if (!this.exists(userId)) return undefined;
     const text = readFileSync(this.path(userId), "utf8").trim();
-    return text.length <= MAX_PROMPT_CHARS ? text : `${text.slice(0, MAX_PROMPT_CHARS)}\n…`;
+    if (text.length <= MAX_PROMPT_CHARS) return text;
+    // Over the cap: keep the newest memories (they are appended last), then fill with the profile body.
+    const [head = "", tail = ""] = text.split(MEMORIES);
+    const memories: string[] = [];
+    let used = 0;
+    for (const line of tail.split("\n").filter((l) => l.startsWith("- ")).reverse()) {
+      if (used + line.length + 1 > MAX_MEMORY_CHARS) break;
+      memories.unshift(line);
+      used += line.length + 1;
+    }
+    const body = head.trim().slice(0, MAX_PROMPT_CHARS - used - MEMORIES.length - 10);
+    return `${body}\n…\n\n${MEMORIES}\n${memories.join("\n")}`;
   }
 
   /** Write a new profile body. Existing memories are kept. */
@@ -46,12 +59,14 @@ export class Profiles {
 
   /** Remove memory lines that contain `phrase` (case-insensitive). Returns how many were removed. */
   forget(userId: string, phrase: string): number {
-    if (!this.exists(userId) || !phrase.trim()) return 0;
     const needle = phrase.trim().toLowerCase();
+    if (!this.exists(userId) || needle.length < MIN_FORGET_CHARS) return 0;
     const text = readFileSync(this.path(userId), "utf8");
     const [head, tail = ""] = text.split(MEMORIES);
     const lines = tail.split("\n");
-    const kept = lines.filter((l) => !(l.startsWith("- ") && l.toLowerCase().includes(needle)));
+    // Match the memory text only, not the "- 2026-10-05: " date prefix.
+    const memoryText = (line: string) => line.replace(/^- \d{4}-\d{2}-\d{2}: /, "").toLowerCase();
+    const kept = lines.filter((l) => !(l.startsWith("- ") && memoryText(l).includes(needle)));
     if (kept.length === lines.length) return 0;
     writeFileSync(this.path(userId), `${head}${MEMORIES}${kept.join("\n")}`);
     return lines.length - kept.length;

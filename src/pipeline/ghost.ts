@@ -110,7 +110,11 @@ export class Ghost {
   }
 
   /** Gather context, call the model, and render the reply. Separate from Slack posting so `npm run ask` can reuse it. */
-  async answer(event: MentionEvent, rawQuestion: string): Promise<Answer> {
+  /**
+   * `applyDirectives: false` is for scheduled task runs: they must not create more schedules or
+   * change memory. Directives are still removed from the text.
+   */
+  async answer(event: MentionEvent, rawQuestion: string, options: { applyDirectives?: boolean } = {}): Promise<Answer> {
     const { api, users, retriever, backend, limiter, identity } = this.deps;
     // Resolve <@U123>, <#C123|name>, and &amp; so the model and the search both see plain text.
     await users.warm([], [rawQuestion]);
@@ -156,7 +160,7 @@ export class Ghost {
       backend.complete({ system: built.system, prompt: built.prompt, timeoutMs: this.deps.modelTimeoutMs }),
     );
     const { text, directives } = extractDirectives(raw);
-    const notes = event.user ? await this.apply(directives, { userId: event.user, name: askerName, channelId: event.channel, tz: timezone ?? "UTC" }) : [];
+    const notes = event.user && options.applyDirectives !== false ? await this.apply(directives, { userId: event.user, name: askerName, channelId: event.channel, tz: timezone ?? "UTC" }) : [];
     const rendered = renderAnswer(text, built.sources);
     const footer = notes.length ? `\n\n${notes.map((n) => `_${n}_`).join("\n")}` : "";
     return { text: rendered.text + footer, sourceCount: built.sources.length, citedCount: rendered.cited };

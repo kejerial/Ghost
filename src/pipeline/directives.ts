@@ -25,7 +25,8 @@ export type Directive =
   | { type: "connect"; name: string }
   | { type: "invalid"; raw: string; reason: string };
 
-const PATTERN = /<<\s*(remember|forget|schedule|cancel|connect)\s*:\s*([\s\S]*?)>>/gi;
+/** A directive ends at ">>" followed by the end of a line, so ">>" inside a value does not cut it short. */
+const PATTERN = /<<\s*(remember|forget|schedule|cancel|connect)\s*:\s*([\s\S]*?)>>(?=[ \t]*(?:\r?\n|$))/gi;
 
 export function extractDirectives(modelText: string): { text: string; directives: Directive[] } {
   const directives: Directive[] = [];

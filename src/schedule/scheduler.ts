@@ -49,6 +49,8 @@ export type TaskRunner = (schedule: Schedule) => Promise<string>;
 export class Scheduler {
   private timer: NodeJS.Timeout | undefined;
   private ticking = false;
+  /** Rows that a create() or tick() is handing to Slack right now. Others skip them. */
+  private readonly queuing = new Set<number>();
 
   constructor(
     private readonly db: DB,
@@ -70,7 +72,7 @@ export class Scheduler {
   }
 
   async create(spec: ScheduleSpec, context: { userId: string; channelId: string; tz: string }): Promise<Schedule> {
-    const nextRun = spec.cron ? nextCron(spec.cron, context.tz, this.now()) : Date.parse(spec.at!);
+    const nextRun = spec.cron ? nextCron(spec.cron, context.tz, this.now()) : parseLocalTime(spec.at!, context.tz);
     if (!Number.isFinite(nextRun)) throw new Error(`invalid time: ${spec.at}`);
     if (nextRun < this.now() - 60_000) throw new Error("that time is in the past");
     const result = this.db
@@ -78,7 +80,15 @@ export class Scheduler {
       .run(context.userId, context.channelId, spec.kind, spec.text, spec.cron ?? null, context.tz, nextRun, this.now());
     const id = Number(result.lastInsertRowid);
     const schedule = this.get(id)!;
-    if (schedule.kind === "reminder") await this.queueReminder(schedule);
+    if (schedule.kind === "reminder") {
+      try {
+        await this.queueReminder(schedule);
+      } catch (error) {
+        // The user sees the failure and may retry, so do not leave a copy that a later tick would queue.
+        this.db.prepare(`DELETE FROM schedules WHERE id = ?`).run(id);
+        throw error;
+      }
+    }
     return this.getAny(id)!;
   }
 
@@ -103,8 +113,11 @@ export class Scheduler {
     if (this.ticking) return;
     this.ticking = true;
     try {
-      const rows = (this.db.prepare(`SELECT * FROM schedules WHERE active = 1`).all() as Row[]).map(toSchedule);
-      for (const schedule of rows) {
+      const ids = (this.db.prepare(`SELECT id FROM schedules WHERE active = 1`).all() as Array<{ id: number }>).map((r) => r.id);
+      for (const id of ids) {
+        // Re-read each row: an earlier task in this tick can take minutes, and the user can cancel meanwhile.
+        const schedule = this.get(id);
+        if (!schedule) continue;
         try {
           if (schedule.kind === "reminder") await this.tickReminder(schedule);
           else if (schedule.nextRun <= this.now()) await this.runDueTask(schedule);
@@ -130,6 +143,16 @@ export class Scheduler {
 
   /** Hand the next run to Slack, or post it now when it is due. Repeats until the next run is in the future. */
   private async queueReminder(schedule: Schedule): Promise<void> {
+    if (this.queuing.has(schedule.id)) return;
+    this.queuing.add(schedule.id);
+    try {
+      await this.queueReminderNow(schedule);
+    } finally {
+      this.queuing.delete(schedule.id);
+    }
+  }
+
+  private async queueReminderNow(schedule: Schedule): Promise<void> {
     let current: Schedule | undefined = schedule;
     while (current && !current.slackMessageId) {
       if (current.nextRun - this.now() > SLACK_HORIZON_MS) return; // too far ahead; a later tick queues it
@@ -172,6 +195,39 @@ export class Scheduler {
     const row = this.db.prepare(`SELECT * FROM schedules WHERE id = ?`).get(id) as Row | undefined;
     return row ? toSchedule(row) : undefined;
   }
+}
+
+/**
+ * Resolve the model's time. Local wall time without an offset ("2026-11-10T09:00") is read in the
+ * user's timezone, so a reminder after a DST change keeps its local hour. A time with an explicit
+ * offset or "Z" is an exact instant and is used as is.
+ */
+export function parseLocalTime(at: string, tz: string): number {
+  if (/(Z|[+-]\d{2}:?\d{2})$/i.test(at.trim())) return Date.parse(at);
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(at.trim());
+  if (!m) return NaN;
+  const [y, mo, d, h, mi, s] = m.slice(1).map((part) => Number(part ?? 0));
+  const wall = Date.UTC(y!, mo! - 1, d!, h!, mi!, s!);
+  // Find the instant whose local time in `tz` is `wall`. Two passes settle DST boundaries.
+  let guess = wall - offsetMs(wall, tz);
+  guess = wall - offsetMs(guess, tz);
+  return guess;
+}
+
+function offsetMs(instant: number, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(new Date(instant));
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  const local = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  return local - Math.floor(instant / 1000) * 1000;
 }
 
 export function nextCron(cron: string, tz: string, after: number): number {

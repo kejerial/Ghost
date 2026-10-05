@@ -51,7 +51,7 @@ export async function createRuntime(
   });
   const scheduler = new Scheduler(store.db, api, async (s) => {
     const ts = (Date.now() / 1000).toFixed(6);
-    return (await ghost.answer({ channel: s.channelId, ts, user: s.userId, text: s.text }, s.text)).text;
+    return (await ghost.answer({ channel: s.channelId, ts, user: s.userId, text: s.text }, s.text, { applyDirectives: false })).text;
   });
   ghost.attachScheduler(scheduler);
   return { api, store, users, syncer, ghost, scheduler, identity };
