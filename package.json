@@ -1,0 +1,31 @@
+{
+  "name": "ghost",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ghost: a Slack teammate that answers with Slack history and a local Claude/Codex subscription.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "tsx --env-file-if-exists=.env src/index.ts",
+    "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
+    "doctor": "tsx --env-file-if-exists=.env src/doctor.ts",
+    "ask": "tsx --env-file-if-exists=.env src/ask.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:smoke": "GHOST_SMOKE=1 vitest run test/smoke.test.ts"
+  },
+  "dependencies": {
+    "@slack/bolt": "^5.1.0",
+    "better-sqlite3": "^13.0.3",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

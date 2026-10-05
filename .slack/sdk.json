@@ -1,0 +1,13 @@
+{
+  "runtime": "node",
+  "hooks": {
+    "get-manifest": "node -e \"process.stdout.write(require('fs').readFileSync('manifest.json', 'utf8'))\" --",
+    "start": "node_modules/.bin/tsx --env-file-if-exists=.env src/index.ts"
+  },
+  "config": {
+    "sdk-managed-connection-enabled": true,
+    "watch": {
+      "manifest": { "paths": ["manifest.json"] }
+    }
+  }
+}
