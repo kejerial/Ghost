@@ -10,8 +10,9 @@ export class ClaudeCliBackend implements ModelBackend {
     private readonly options: { model?: string; command?: string; run?: Runner; mcpServers?: () => McpServer[] } = {},
   ) {}
 
-  args(system: string): string[] {
-    const servers = this.options.mcpServers?.() ?? [];
+  args(system: string, request?: CompletionRequest): string[] {
+    const all = this.options.mcpServers?.() ?? [];
+    const servers = request?.connections ? all.filter((s) => request.connections!.includes(s.name)) : all;
     const args = [
       "-p",
       "--output-format", "json",
@@ -32,7 +33,7 @@ export class ClaudeCliBackend implements ModelBackend {
 
   async complete(request: CompletionRequest): Promise<string> {
     const run = this.options.run ?? runProcess;
-    const result = await run(this.options.command ?? "claude", this.args(request.system), {
+    const result = await run(this.options.command ?? "claude", this.args(request.system, request), {
       stdin: request.prompt,
       cwd: modelSandboxDir(),
       env: { ...childEnv(), ...mcpEnv(this.options.mcpServers?.() ?? []) },

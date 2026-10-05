@@ -44,6 +44,9 @@ export interface SlackApi {
   /** Post a message. Without `threadTs`, the message goes to the channel itself. */
   post(channelId: string, threadTs: string | undefined, text: string): Promise<{ ts: string }>;
   addReaction(channelId: string, ts: string, name: string): Promise<void>;
+  /** Edit Ghost's own message (used only for the plain-text status line). */
+  update(channelId: string, ts: string, text: string): Promise<void>;
+  deleteMessage(channelId: string, ts: string): Promise<void>;
   removeReaction(channelId: string, ts: string, name: string): Promise<void>;
 }
 
@@ -141,6 +144,14 @@ export function slackApiFrom(client: WebClient): SlackApi {
         link_names: false,
       });
       return { ts: r.ts! };
+    },
+
+    async update(channelId, ts, text) {
+      await client.chat.update({ channel: channelId, ts, text, parse: "none", link_names: false });
+    },
+
+    async deleteMessage(channelId, ts) {
+      await client.chat.delete({ channel: channelId, ts });
     },
 
     async addReaction(channelId, ts, name) {

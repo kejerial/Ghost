@@ -216,6 +216,20 @@ describe("Ghost.handleMention", () => {
     expect(backend.requests[0]!.prompt).toContain("Needs login: granola");
   });
 
+  it("shows a live status line while working and deletes it after the answer", async () => {
+    const backend = new FakeBackend((request) => {
+      request.onProgress?.({ kind: "web" });
+      request.onProgress?.({ kind: "web" }); // same step: no extra update
+      request.onProgress?.({ kind: "connection", name: "granola" });
+      return "Done.";
+    });
+    const { slack, ghost } = await workspace(backend);
+    await ghost.handleMention({ channel: "CGEN", ts: tsDaysAgo(0), user: "UK", text: "what happened in my last meeting?" }, "channel");
+    expect(slack.posts.map((p) => p.text)).toEqual(["🔎 Searching the web…", "Done."]);
+    expect(slack.updates.map((u) => u.text)).toEqual(["📎 Checking Granola…"]);
+    expect(slack.deleted).toEqual([slack.posts[0]!.ts]);
+  });
+
   it("scheduled task runs strip directives but do not apply them", async () => {
     const at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const backend = new FakeBackend(`Summary.\n<<schedule: {"kind":"task","text":"again","at":"${at}"}>>\n<<remember: x y z>>`);

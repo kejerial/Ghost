@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { extractDirectives } from "../src/pipeline/directives.js";
+import { pickConnections } from "../src/integrations/router.js";
+import { CodexCliBackend, progressReader } from "../src/backend/codex.js";
 import { claudeMcpConfig, codexMcpArgs, Connections, displayName, fromCodexList, mcpEnv } from "../src/integrations/mcp.js";
 import { localTime } from "../src/pipeline/prompt.js";
 import { Scheduler, nextCron, parseLocalTime } from "../src/schedule/scheduler.js";
@@ -295,5 +297,44 @@ describe("displayName", () => {
       "Linear Kevinjeon",
       "Context7",
     ]);
+  });
+});
+
+describe("speed: connection routing and progress", () => {
+  const all = ["apollo", "github", "granola", "railway-mcp-server", "linear-kevinjeon"];
+
+  it("attaches only the connections a question needs", () => {
+    expect(pickConnections(all, "what were my last 3 meetings about?")).toEqual(["granola"]);
+    expect(pickConnections(all, "any open PRs on the Ghost repo?")).toEqual(["github"]);
+    expect(pickConnections(all, "find 20 prospects in NYC")).toEqual(["apollo"]);
+    expect(pickConnections(all, "is prod deployed?")).toEqual(["railway-mcp-server"]);
+    expect(pickConnections(all, "check my linear tickets")).toEqual(["linear-kevinjeon"]);
+    expect(pickConnections(all, "what's a good cold email subject line?")).toEqual([]);
+  });
+
+  it("keeps a connection for follow-ups through recent conversation text", () => {
+    expect(pickConnections(all, "and the second one?\nYour last Granola meeting was the Lin sync")).toEqual(["granola"]);
+  });
+
+  it("reads web searches and connection calls from Codex events, across chunk boundaries", () => {
+    const steps: unknown[] = [];
+    const read = progressReader((s) => steps.push(s));
+    read('{"type":"item.started","item":{"type":"web_search"}}\n{"type":"item.sta');
+    read('rted","item":{"type":"mcp_tool_call","server":"granola","tool":"list_meetings"}}\n');
+    read('{"type":"item.completed","item":{"type":"agent_message","text":"hi"}}\nnot json\n');
+    expect(steps).toEqual([{ kind: "web" }, { kind: "connection", name: "granola" }]);
+  });
+
+  it("streams JSON and starts only the requested connections", () => {
+    const backend = new CodexCliBackend({
+      mcpServers: () => [
+        { name: "granola", type: "http", url: "https://mcp.granola.ai/mcp" },
+        { name: "apollo", type: "http", url: "https://mcp.apollo.io/mcp" },
+      ],
+    });
+    const args = backend.args("/tmp/out", { system: "", prompt: "", timeoutMs: 1, connections: ["granola"] }).join(" ");
+    expect(args).toContain("--json");
+    expect(args).toContain("mcp_servers.granola.url");
+    expect(args).not.toContain("apollo");
   });
 });

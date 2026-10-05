@@ -4,7 +4,13 @@ export interface CompletionRequest {
   /** The packed context and the question. Contains untrusted Slack text. */
   prompt: string;
   timeoutMs: number;
+  /** Connection names to attach to this call. Undefined attaches all of them. */
+  connections?: string[];
+  /** Called as the model works: each web search or connection tool call. */
+  onProgress?: (step: ProgressStep) => void;
 }
+
+export type ProgressStep = { kind: "web" } | { kind: "connection"; name: string };
 
 /**
  * One model call. Implementations: the `claude` CLI, the `codex` CLI, and an

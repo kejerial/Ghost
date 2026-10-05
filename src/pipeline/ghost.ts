@@ -9,6 +9,8 @@ import type { Identity } from "../store/sync.js";
 import type { Limiter } from "../util/limiter.js";
 import { gatherRecent, gatherThread, type ContextMessage } from "./context.js";
 import { displayName, type Connections } from "../integrations/mcp.js";
+import { pickConnections } from "../integrations/router.js";
+import type { ProgressStep } from "../backend/types.js";
 import { PROFILE_PROMPT, type Profiles } from "../memory/profiles.js";
 import { describe as describeSchedule, type Scheduler } from "../schedule/scheduler.js";
 import { extractDirectives, type Directive } from "./directives.js";
@@ -109,10 +111,12 @@ export class Ghost {
     // A reaction shows that Ghost is working. The answer is then posted once, as a new message,
     // so the post-time safety flags (no unfurls, no parsing) apply to it. chat.update has no unfurl flag.
     await api.addReaction(event.channel, event.ts, WORKING_REACTION).catch((error) => log.warn("addReaction failed", errorFields(error)));
+    const status = statusLine(api, event.channel, replyThreadTs);
     try {
       const started = Date.now();
-      const answer = await this.answer(event, question);
+      const answer = await this.answer(event, question, { onProgress: status.show });
       await api.post(event.channel, replyThreadTs, answer.text);
+      await status.clear();
       for (const name of answer.logins) void this.track(this.loginThenAnswer(name, event, question, replyThreadTs));
       log.info("answered", {
         channel: event.channel,
@@ -127,6 +131,7 @@ export class Ghost {
       const message = "Sorry, I couldn't answer that. Something went wrong on my side. Please try again in a minute.";
       await api.post(event.channel, replyThreadTs, message).catch(() => undefined);
     } finally {
+      await status.clear();
       await api.removeReaction(event.channel, event.ts, WORKING_REACTION).catch(() => undefined);
     }
   }
@@ -136,7 +141,11 @@ export class Ghost {
    * `applyDirectives: false` is for scheduled task runs: they must not create more schedules or
    * change memory. Directives are still removed from the text.
    */
-  async answer(event: MentionEvent, rawQuestion: string, options: { applyDirectives?: boolean } = {}): Promise<Answer> {
+  async answer(
+    event: MentionEvent,
+    rawQuestion: string,
+    options: { applyDirectives?: boolean; onProgress?: (step: ProgressStep) => void; forceConnections?: string[] } = {},
+  ): Promise<Answer> {
     const { api, users, retriever, backend, limiter, identity } = this.deps;
     // Resolve <@U123>, <#C123|name>, and &amp; so the model and the search both see plain text.
     await users.warm([], [rawQuestion]);
@@ -178,8 +187,20 @@ export class Ghost {
     });
     log.debug("prompt built", { chars: built.prompt.length, sources: built.sources.length, retrieved: retrieved.length });
 
+    // Attach only the connections this conversation needs; each one adds start-up time to the call.
+    const routingText = [question, ...[...threadContext, ...recent].slice(-6).map((m) => m.text)].join("\n");
+    const attach = connections
+      ? [...new Set([...pickConnections(connections.servers.map((s) => s.name), routingText), ...(options.forceConnections ?? [])])]
+      : undefined;
+    log.debug("connections attached", { attach });
     const raw = await limiter.run(() =>
-      backend.complete({ system: built.system, prompt: built.prompt, timeoutMs: this.deps.modelTimeoutMs }),
+      backend.complete({
+        system: built.system,
+        prompt: built.prompt,
+        timeoutMs: this.deps.modelTimeoutMs,
+        connections: attach,
+        onProgress: options.onProgress,
+      }),
     );
     const { text, directives } = extractDirectives(raw);
     const { notes, logins } =
@@ -253,15 +274,18 @@ export class Ghost {
     // The confirmation went out as soon as the login finished; the answer below can take a while.
     await announced;
     await api.addReaction(event.channel, event.ts, WORKING_REACTION).catch(() => undefined);
+    const status = statusLine(api, event.channel, replyThreadTs);
     try {
       const started = Date.now();
-      const retry = await this.answer(event, question);
+      const retry = await this.answer(event, question, { onProgress: status.show, forceConnections: [name] });
       await api.post(event.channel, replyThreadTs, retry.text);
+      await status.clear();
       log.info("answered after login", { name, ms: Date.now() - started });
     } catch (error) {
       log.error("answer after login failed", { name, ...errorFields(error) });
       await api.post(event.channel, replyThreadTs, `Sorry, my answer failed after the ${label} login. Ask again and I'll use it.`).catch(() => undefined);
     } finally {
+      await status.clear();
       await api.removeReaction(event.channel, event.ts, WORKING_REACTION).catch(() => undefined);
     }
   }
@@ -284,7 +308,7 @@ export class Ghost {
       .join("\n")
       .slice(-30_000);
     void limiter
-      .run(() => backend.complete({ system: PROFILE_PROMPT, prompt: `Messages written by ${name}:\n${corpus}`, timeoutMs: this.deps.modelTimeoutMs }))
+      .run(() => backend.complete({ system: PROFILE_PROMPT, prompt: `Messages written by ${name}:\n${corpus}`, timeoutMs: this.deps.modelTimeoutMs, connections: [] }))
       .then((body) => {
         if (!profiles.exists(userId) || !profiles.read(userId)?.includes("## Who they are")) profiles.writeProfile(userId, name, body);
         log.info("profile drafted", { userId, messages: rows.length });
@@ -300,4 +324,36 @@ export class Ghost {
     this.deps.store.upsertChannel(info);
     return info;
   }
+}
+
+/**
+ * One live status line while Ghost works ("🔎 Searching the web…"). It appears on the first
+ * step, changes as the model moves between steps, and is deleted once the answer is posted.
+ */
+function statusLine(api: SlackApi, channel: string, threadTs: string | undefined) {
+  let ts: string | undefined;
+  let last = "";
+  let closed = false;
+  let chain: Promise<void> = Promise.resolve();
+  const label = (step: ProgressStep) => (step.kind === "web" ? "🔎 Searching the web…" : `📎 Checking ${displayName(step.name)}…`);
+  return {
+    show: (step: ProgressStep) => {
+      const text = label(step);
+      if (closed || text === last) return;
+      last = text;
+      chain = chain
+        .then(async () => {
+          if (ts) await api.update(channel, ts, text);
+          else ts = (await api.post(channel, threadTs, text)).ts;
+        })
+        .catch((error) => log.debug("status update failed", errorFields(error)));
+    },
+    clear: async () => {
+      closed = true;
+      await chain;
+      const posted = ts;
+      ts = undefined;
+      if (posted) await api.deleteMessage(channel, posted).catch(() => undefined);
+    },
+  };
 }

@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BackendError, type CompletionRequest, type ModelBackend } from "./types.js";
+import { BackendError, type CompletionRequest, type ModelBackend, type ProgressStep } from "./types.js";
 import { codexMcpArgs, mcpEnv, type McpServer } from "../integrations/mcp.js";
 import { childEnv, modelSandboxDir, runProcess, tail, type Runner } from "./subprocess.js";
 
@@ -43,7 +43,12 @@ export class CodexCliBackend implements ModelBackend {
     } = {},
   ) {}
 
-  args(outputFile: string): string[] {
+  private servers(request?: CompletionRequest): McpServer[] {
+    const all = this.options.mcpServers?.() ?? [];
+    return request?.connections ? all.filter((s) => request.connections!.includes(s.name)) : all;
+  }
+
+  args(outputFile: string, request?: CompletionRequest): string[] {
     const args = [
       "exec",
       // Skip ~/.codex/config.toml: no MCP servers, hooks, or profiles. Auth still comes from CODEX_HOME.
@@ -52,6 +57,7 @@ export class CodexCliBackend implements ModelBackend {
       "--ephemeral",
       "--skip-git-repo-check",
       "--color", "never",
+      "--json", // stream events, so Ghost can show what the model is doing
       "-s", "read-only",
       // Live web search is the only tool left on. Shell, files, and apps stay off (see DISABLED_FEATURES).
       "-c", "web_search=\"live\"",
@@ -60,7 +66,7 @@ export class CodexCliBackend implements ModelBackend {
       "-o", outputFile,
     ];
     for (const feature of DISABLED_FEATURES) args.push("--disable", feature);
-    args.push(...codexMcpArgs(this.options.mcpServers?.() ?? []));
+    args.push(...codexMcpArgs(this.servers(request)));
     if (this.options.model) args.push("-m", this.options.model);
     args.push("-"); // Read the prompt from stdin.
     return args;
@@ -73,11 +79,12 @@ export class CodexCliBackend implements ModelBackend {
     try {
       // codex exec has no system-prompt flag, so the instructions lead the prompt.
       const stdin = `<instructions>\n${request.system}\n</instructions>\n\n${request.prompt}`;
-      const result = await run(this.options.command ?? "codex", this.args(outputFile), {
+      const result = await run(this.options.command ?? "codex", this.args(outputFile, request), {
         stdin,
         cwd: modelSandboxDir(),
-        env: { ...childEnv(), ...mcpEnv(this.options.mcpServers?.() ?? []) },
+        env: { ...childEnv(), ...mcpEnv(this.servers(request)) },
         timeoutMs: request.timeoutMs,
+        onOutput: request.onProgress ? progressReader(request.onProgress) : undefined,
       });
       if (result.timedOut) throw new BackendError(`codex timed out after ${request.timeoutMs / 1000}s`);
       const answer = await readFile(outputFile, "utf8").catch(() => "");
@@ -101,4 +108,26 @@ export class CodexCliBackend implements ModelBackend {
     if (result.code !== 0) throw new BackendError(`codex --version failed: ${tail(result.stderr)}`);
     return result.stdout.trim();
   }
+}
+
+/** Turn Codex `--json` event lines into progress steps. Unknown events are ignored. */
+export function progressReader(onProgress: (step: ProgressStep) => void): (chunk: string) => void {
+  let buffer = "";
+  return (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("{")) continue;
+      try {
+        const event = JSON.parse(line) as { type?: string; item?: { type?: string; server?: string; server_name?: string } };
+        if (event.type !== "item.started" || !event.item) continue;
+        if (event.item.type === "web_search") onProgress({ kind: "web" });
+        const server = event.item.server ?? event.item.server_name;
+        if (event.item.type?.includes("mcp") && server) onProgress({ kind: "connection", name: server });
+      } catch {
+        // not an event line
+      }
+    }
+  };
 }

@@ -118,6 +118,17 @@ export class FakeSlack implements SlackApi {
     return { ts };
   }
 
+  updates: Array<{ channel: string; ts: string; text: string }> = [];
+  deleted: string[] = [];
+
+  async update(channel: string, ts: string, text: string) {
+    this.updates.push({ channel, ts, text });
+  }
+
+  async deleteMessage(_channel: string, ts: string) {
+    this.deleted.push(ts);
+  }
+
   async addReaction(channel: string, ts: string, name: string) {
     this.reactions.push({ op: "add", channel, ts, name });
   }
