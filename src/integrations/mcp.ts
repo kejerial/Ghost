@@ -209,6 +209,10 @@ export function codexMcpArgs(servers: McpServer[]): string[] {
   const args: string[] = [];
   const set = (name: string, key: string, value: unknown) => args.push("-c", `mcp_servers.${name}.${key}=${toml(value)}`);
   for (const s of servers) {
+    // `codex exec` cannot show approval prompts (its approval policy is fixed to "never"), so a tool
+    // that asks for approval would always be refused. Approve connection tools up front; the system
+    // prompt limits changes to what the asker explicitly requests.
+    set(s.name, "default_tools_approval_mode", "approve");
     if (s.type === "http") {
       set(s.name, "url", s.url);
       if (s.bearerEnvVar) set(s.name, "bearer_token_env_var", s.bearerEnvVar);

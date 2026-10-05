@@ -127,6 +127,7 @@ describe("connections (MCP)", () => {
     const servers = fromCodexList(list);
     const codex = codexMcpArgs(servers);
     expect(codex).toContain('mcp_servers.linear.url="https://mcp.linear.app/mcp"');
+    expect(codex).toContain('mcp_servers.linear.default_tools_approval_mode="approve"');
     expect(codex).toContain('mcp_servers.github.env_vars=["GITHUB_PERSONAL_ACCESS_TOKEN"]');
     expect(codex.join(" ")).not.toContain("secret");
     expect(claudeMcpConfig(servers)).not.toContain("secret");
