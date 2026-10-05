@@ -17,6 +17,7 @@ export function tsDaysAgo(daysAgo: number, seq = 0): string {
 
 export interface FakeChannel extends ChannelInfo {
   messages: SlackMessage[];
+  members: string[];
 }
 
 /** An in-memory Slack workspace that implements the SlackApi interface. */
@@ -28,8 +29,8 @@ export class FakeSlack implements SlackApi {
   calls: string[] = [];
   private seq = 0;
 
-  addChannel(id: string, name: string, options: { isMember?: boolean } = {}): FakeChannel {
-    const channel = { id, name, isMember: options.isMember ?? true, messages: [] };
+  addChannel(id: string, name: string, options: { isMember?: boolean; members?: string[] } = {}): FakeChannel {
+    const channel = { id, name, isMember: options.isMember ?? true, messages: [], members: options.members ?? [BOT_USER] };
     this.channels.set(id, channel);
     return channel;
   }
@@ -55,12 +56,12 @@ export class FakeSlack implements SlackApi {
   }
 
   async memberChannels(): Promise<ChannelInfo[]> {
-    return [...this.channels.values()].filter((c) => c.isMember).map(({ messages: _m, ...info }) => info);
+    return [...this.channels.values()].filter((c) => c.isMember).map(({ messages: _m, members: _p, ...info }) => info);
   }
 
   async channelInfo(channelId: string): Promise<ChannelInfo> {
     this.calls.push(`info:${channelId}`);
-    const { messages: _m, ...info } = this.channels.get(channelId)!;
+    const { messages: _m, members: _p, ...info } = this.channels.get(channelId)!;
     return info;
   }
 
@@ -82,6 +83,11 @@ export class FakeSlack implements SlackApi {
       .messages.filter((m) => m.ts === threadTs || m.thread_ts === threadTs)
       .sort((a, b) => Number(a.ts) - Number(b.ts));
     return { messages };
+  }
+
+  async channelMembers(channelId: string): Promise<string[]> {
+    this.calls.push(`members:${channelId}`);
+    return this.channels.get(channelId)!.members;
   }
 
   async userInfo(userId: string) {

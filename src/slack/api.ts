@@ -37,6 +37,7 @@ export interface SlackApi {
   history(channelId: string, options: { oldest?: string; latest?: string; limit: number; cursor?: string }): Promise<Page>;
   replies(channelId: string, threadTs: string, options: { limit: number; cursor?: string; oldest?: string }): Promise<Page>;
   userInfo(userId: string): Promise<{ id: string; name: string; isBot: boolean }>;
+  channelMembers(channelId: string): Promise<string[]>;
   /** Post a message. Without `threadTs`, the message goes to the channel itself. */
   post(channelId: string, threadTs: string | undefined, text: string): Promise<{ ts: string }>;
   addReaction(channelId: string, ts: string, name: string): Promise<void>;
@@ -95,6 +96,17 @@ export function slackApiFrom(client: WebClient): SlackApi {
         oldest: options.oldest,
       });
       return { messages: (r.messages ?? []) as SlackMessage[], nextCursor: r.response_metadata?.next_cursor || undefined };
+    },
+
+    async channelMembers(channelId) {
+      const members: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const r = await client.conversations.members({ channel: channelId, limit: 200, cursor });
+        members.push(...(r.members ?? []));
+        cursor = r.response_metadata?.next_cursor || undefined;
+      } while (cursor);
+      return members;
     },
 
     async userInfo(userId) {

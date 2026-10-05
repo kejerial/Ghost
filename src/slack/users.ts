@@ -37,6 +37,12 @@ export class UserDirectory {
     }
   }
 
+  /** True for bot users (apps, integrations). Uses the same cache as names. */
+  async isBot(userId: string): Promise<boolean> {
+    await this.name(userId);
+    return this.store.getUser(userId)?.isBot ?? false;
+  }
+
   /** Load names for every user ID that appears as an author or a mention in `texts`. */
   async warm(userIds: Iterable<string | undefined>, texts: Iterable<string | undefined> = []): Promise<void> {
     const ids = new Set<string>();

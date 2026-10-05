@@ -198,11 +198,11 @@ export class Store {
       .run(id, name, isBot ? 1 : 0, Date.now());
   }
 
-  getUser(id: string): { name: string; updatedAt: number } | undefined {
-    const row = this.db.prepare(`SELECT name, updated_at FROM users WHERE id = ?`).get(id) as
-      | { name: string; updated_at: number }
+  getUser(id: string): { name: string; isBot: boolean; updatedAt: number } | undefined {
+    const row = this.db.prepare(`SELECT name, is_bot, updated_at FROM users WHERE id = ?`).get(id) as
+      | { name: string; is_bot: number; updated_at: number }
       | undefined;
-    return row ? { name: row.name, updatedAt: row.updated_at } : undefined;
+    return row ? { name: row.name, isBot: row.is_bot === 1, updatedAt: row.updated_at } : undefined;
   }
 
   /** Returns true the first time a key is seen. Slack retries events, so handlers must be idempotent. */

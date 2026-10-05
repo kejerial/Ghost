@@ -50,12 +50,31 @@ slack run
 
 Ghost answers only while `slack run` runs. `slack run` installs a development copy of the app in your workspace.
 
+## Chat in your personal channel
+
+In any channel where you are the only human member, Ghost answers every message you send, with no tag. It replies in the channel, or in the thread when you write in a thread. In other channels, tag `@Ghost`; Ghost replies in the thread. To force chat mode in one specific channel, set `GHOST_HOME_CHANNEL` in `.env`.
+
+## Run in the background
+
+`slack run` stops when you close its terminal. To keep Ghost running, use the "Ghost" app (not "Ghost (local)") and a macOS login item.
+
+1. Open the app settings page: <https://api.slack.com/apps/A0XXXXXXXXX>.
+2. Open **OAuth & Permissions**. Copy the **Bot User OAuth Token** into `.env` as `SLACK_BOT_TOKEN`.
+3. Open **Basic Information → App-Level Tokens**. Generate a token with the `connections:write` scope. Copy it into `.env` as `SLACK_APP_TOKEN`.
+4. Stop any running `slack run`. Then install the login item:
+```bash
+scripts/service.sh install
+```
+
+Ghost then starts at login and restarts after a crash. It runs only while your Mac is awake. Use `scripts/service.sh restart` after a change, and `scripts/service.sh logs` to read the log.
+
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
 | `slack run` | Run Ghost with tokens from the Slack CLI. |
 | `npm start` | Run Ghost with tokens from `.env`. |
+| `scripts/service.sh install` | Run Ghost in the background at every login. |
 | `npm run doctor` | Check the tokens, scopes, database, and backend. Add `-- --live` to send one test prompt. |
 | `npm run ask -- --channel C0123 "question"` | Run the full pipeline on real Slack data and print the answer. Posts nothing. Add `--thread TS` or `--sync`. |
 | `npm test` | Run the unit and pipeline tests. |

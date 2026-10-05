@@ -1,6 +1,7 @@
 import { App, LogLevel } from "@slack/bolt";
 import { loadConfig } from "./config.js";
 import { errorFields, log, setLogLevel } from "./log.js";
+import { ChatChannels } from "./pipeline/chat-channels.js";
 import { createRuntime } from "./runtime.js";
 import type { MessageEvent } from "./store/sync.js";
 
@@ -15,9 +16,9 @@ const app = new App({
 });
 
 const runtime = await createRuntime(config, app.client);
-const { ghost, syncer, store, identity, api } = runtime;
+const { ghost, syncer, store, identity, api, users } = runtime;
 
-// The home channel: Ghost answers every human message there, no tag needed, and replies in the channel.
+// Optional override. Without it, Ghost chats in any channel where you are the only human member.
 let homeChannelId: string | undefined;
 if (config.homeChannel) {
   const channels = await api.memberChannels();
@@ -25,16 +26,13 @@ if (config.homeChannel) {
   if (!homeChannelId) log.warn("GHOST_HOME_CHANNEL not found among Ghost's channels; invite Ghost there first", { homeChannel: config.homeChannel });
 }
 
-// Answer mentions. The handler returns at once so Bolt acknowledges the event quickly.
+const chat = new ChatChannels(api, users, identity.botUserId, homeChannelId);
+
+// Answer mentions. In a chat channel the reply goes to the channel; elsewhere it goes to the thread.
+// The message handler can see the same message; event dedupe in Ghost answers it once.
 app.event("app_mention", async ({ event }) => {
-  if (event.channel === homeChannelId) return; // the message handler answers it
-  void ghost.handleMention({
-    channel: event.channel,
-    ts: event.ts,
-    thread_ts: event.thread_ts,
-    user: event.user,
-    text: event.text,
-  });
+  const placement = (await chat.isChat(event.channel, event.user)) ? "channel" : "thread";
+  void ghost.handleMention({ channel: event.channel, ts: event.ts, thread_ts: event.thread_ts, user: event.user, text: event.text }, placement);
 });
 
 // Keep the index current from live message events (message.channels, message.groups).
@@ -42,15 +40,15 @@ app.event("message", async ({ event }) => {
   const message = event as unknown as MessageEvent;
   syncer.ingest(message).catch((error) => log.warn("ingest failed", errorFields(error)));
   const human = message.user && !message.bot_id && (!message.subtype || message.subtype === "file_share" || message.subtype === "thread_broadcast");
-  if (message.channel === homeChannelId && human) {
-    void ghost.handleMention(
-      { channel: message.channel, ts: message.ts, thread_ts: message.thread_ts, user: message.user, text: message.text ?? "" },
-      "channel",
-    );
-  }
+  if (!human || !(await chat.isChat(message.channel, message.user))) return;
+  void ghost.handleMention(
+    { channel: message.channel, ts: message.ts, thread_ts: message.thread_ts, user: message.user, text: message.text ?? "" },
+    "channel",
+  );
 });
 
 app.event("member_joined_channel", async ({ event }) => {
+  chat.forget(event.channel);
   if (event.user !== identity.botUserId) return;
   log.info("Ghost joined a channel", { channel: event.channel });
   syncer.joined(event.channel).catch((error) => log.error("join sync failed", { channel: event.channel, ...errorFields(error) }));
