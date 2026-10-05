@@ -1,8 +1,12 @@
 import { webApi } from "@slack/bolt";
+import { dirname, join } from "node:path";
 import { createBackend } from "./backend/index.js";
 import type { Config } from "./config.js";
+import { loadMcpServers } from "./integrations/mcp.js";
+import { Profiles } from "./memory/profiles.js";
 import { Ghost } from "./pipeline/ghost.js";
 import { FtsRetriever } from "./retrieval/search.js";
+import { Scheduler } from "./schedule/scheduler.js";
 import { slackApiFrom, type SlackApi } from "./slack/api.js";
 import { UserDirectory } from "./slack/users.js";
 import { openDb, Store } from "./store/db.js";
@@ -15,6 +19,7 @@ export interface Runtime {
   users: UserDirectory;
   syncer: Syncer;
   ghost: Ghost;
+  scheduler: Scheduler;
   identity: { botUserId: string; botId?: string; teamUrl: string };
 }
 
@@ -29,16 +34,23 @@ export async function createRuntime(
   const store = new Store(openDb(config.dbPath));
   const users = new UserDirectory(api, store);
   const syncer = new Syncer(api, store, users, identity, { backfillDays: config.backfillDays });
+  const mcpServers = await loadMcpServers({ mode: config.connections, exclude: config.connectionsExclude });
   const ghost = new Ghost({
     api,
     store,
     users,
     retriever: new FtsRetriever(store),
-    backend: createBackend(config),
+    backend: createBackend(config, mcpServers),
     limiter: new Limiter(config.maxConcurrency),
     identity,
     contextChars: config.contextChars,
     modelTimeoutMs: config.modelTimeoutMs,
+    profiles: new Profiles(join(dirname(config.dbPath), "profiles")),
   });
-  return { api, store, users, syncer, ghost, identity };
+  const scheduler = new Scheduler(store.db, api, async (s) => {
+    const ts = (Date.now() / 1000).toFixed(6);
+    return (await ghost.answer({ channel: s.channelId, ts, user: s.userId, text: s.text }, s.text)).text;
+  });
+  ghost.attachScheduler(scheduler);
+  return { api, store, users, syncer, ghost, scheduler, identity };
 }

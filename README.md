@@ -4,7 +4,11 @@ A personal Slack assistant that runs on your Mac. It answers with your Slack his
 
 - In a channel where you are the only human member, Ghost answers every message. No tag needed.
 - In other channels, tag `@Ghost`. Ghost replies in the thread.
-- Ghost cites the Slack messages it uses and links web sources when they help.
+- Ghost cites Slack messages and web sources as `[1]`, `[2]` and lists them once at the bottom.
+- **Memory:** each person gets a local profile in `data/profiles/<SLACK_USER_ID>.md`. Ghost drafts it from their messages. Say "remember …" or "forget …" to change it, or edit the file.
+- **Reminders:** "remind me tomorrow at 9 to …" or "every weekday at 8:30 …". Slack's own scheduler posts them, so they arrive on time even when your Mac sleeps.
+- **Scheduled tasks:** "every Monday at 8 summarize #sales". Ghost runs them while your Mac is awake, and runs missed ones on wake.
+- **Connections:** Ghost reuses your Codex CLI connections (GitHub, Linear, Apollo, and others), except ones that control your Mac. Without Codex GitHub, it uses your `gh` login read-only. To add a connection, log in with `codex mcp login <name>` and run `scripts/service.sh restart`.
 
 ## Setup
 
@@ -76,9 +80,13 @@ Fastest path: open this repo in Claude Code or Codex and say **"Set up Ghost by 
 | `src/pipeline/chat-channels.ts` | Decides where Ghost answers without a tag. |
 | `src/retrieval/search.ts` | Search and ranking over the local index. |
 | `src/store/` | SQLite index (`data/ghost.db`) and Slack sync. |
-| `src/backend/` | `codex` and `claude` CLI calls (web search only, no shell or files). |
+| `src/backend/` | `codex` and `claude` CLI calls (web search and connections; no shell or files). |
+| `src/integrations/mcp.ts` | Loads connections from the Codex CLI and `gh`. |
+| `src/memory/profiles.ts` | Per-user profile and memories. |
+| `src/schedule/scheduler.ts` | Reminders (Slack-scheduled) and scheduled tasks. |
+| `src/pipeline/directives.ts` | Parses the model's `<<remember/forget/schedule/cancel>>` commands. |
 | `.env.example` | Every setting, with defaults. |
 
 ## Caution
 
-Anyone in the workspace can tag `@Ghost`. Ghost then answers with your subscription and can quote any channel it is in, including private ones. Invite it only to channels you are comfortable with it repeating.
+Anyone in the workspace can tag `@Ghost`. Ghost then answers with your subscription and your connections, and it can quote any channel it is in, including private ones. Invite it only to channels you are comfortable with it repeating.

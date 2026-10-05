@@ -58,8 +58,19 @@ describe("renderAnswer", () => {
   });
 
   it("converts Markdown to Slack mrkdwn", () => {
-    const { text } = renderAnswer("## Plan\n**Bold** and [docs](https://docs.test/a)\n> quoted", []);
-    expect(text).toBe("*Plan*\n*Bold* and <https://docs.test/a|docs>\n> quoted");
+    const { text } = renderAnswer("## Plan\n**Bold**\n> quoted", []);
+    expect(text).toBe("*Plan*\n*Bold*\n> quoted");
+  });
+
+  it("numbers web links like Slack citations and lists every source once at the bottom", () => {
+    const { text, cited } = renderAnswer(
+      "Annual pricing [S1]. See [YC's guide](https://yc.test/g) and [YC's guide](https://yc.test/g) and [video](https://yt.test/v).",
+      sources,
+    );
+    expect(cited).toBe(3);
+    expect(text).toContain("Annual pricing <https://acme.slack.com/archives/C1/p1|[1]>.");
+    expect(text).toContain("See YC's guide <https://yc.test/g|[2]> and YC's guide <https://yc.test/g|[2]> and video <https://yt.test/v|[3]>.");
+    expect(text).toContain("*Sources*\n1. <https://acme.slack.com/archives/C1/p1|#pricing · Ana · 2026-03-01>\n2. <https://yc.test/g|YC's guide>\n3. <https://yt.test/v|video>");
   });
 
   it("does not turn non-http Markdown links into Slack links", () => {

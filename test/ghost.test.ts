@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Ghost, HELP_TEXT, type GhostDeps } from "../src/pipeline/ghost.js";
+import { Scheduler } from "../src/schedule/scheduler.js";
 import { FtsRetriever } from "../src/retrieval/search.js";
 import { UserDirectory } from "../src/slack/users.js";
 import { Syncer } from "../src/store/sync.js";
 import { Limiter } from "../src/util/limiter.js";
 import type { ModelBackend } from "../src/backend/types.js";
-import { BOT_ID, BOT_USER, FakeBackend, FakeSlack, memoryStore, TEAM_URL, tsDaysAgo } from "./fakes.js";
+import { BOT_ID, BOT_USER, FakeBackend, FakeSlack, memoryStore, TEAM_URL, tempProfiles, tsDaysAgo } from "./fakes.js";
 
 async function workspace(backend: ModelBackend) {
   const slack = new FakeSlack();
@@ -36,8 +37,11 @@ async function workspace(backend: ModelBackend) {
     identity,
     contextChars: 24000,
     modelTimeoutMs: 1000,
+    profiles: tempProfiles(),
   };
-  return { slack, store, ghost: new Ghost(deps) };
+  const ghost = new Ghost(deps);
+  ghost.attachScheduler(new Scheduler(store.db, slack, async () => "done"));
+  return { slack, store, ghost, profiles: deps.profiles };
 }
 
 describe("Ghost.handleMention", () => {
@@ -154,6 +158,25 @@ describe("Ghost.handleMention", () => {
     const root = tsDaysAgo(0.01);
     await ghost.handleMention({ channel: "CGEN", ts: tsDaysAgo(0), thread_ts: root, user: "UK", text: "and then?" }, "channel");
     expect(slack.posts[0]!.threadTs).toBe(root);
+  });
+
+  it("applies directives: saves the memory, queues the reminder in Slack, and posts clean text", async () => {
+    const at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const backend = new FakeBackend(
+      `Done, I'll remind you tomorrow.\n<<remember: prefers short answers>>\n<<schedule: {"kind":"reminder","text":"Email the principal","at":"${at}"}>>`,
+    );
+    const { slack, ghost, profiles } = await workspace(backend);
+    await ghost.handleMention({ channel: "CGEN", ts: tsDaysAgo(0), user: "UK", text: "remind me tomorrow to email the principal" }, "channel");
+    expect(slack.posts[0]!.text).toBe("Done, I'll remind you tomorrow.");
+    expect(profiles.read("UK")).toContain("prefers short answers");
+    expect(slack.scheduled[0]).toMatchObject({ channel: "CGEN", text: "⏰ <@UK> Email the principal" });
+
+    await ghost.handleMention({ channel: "CGEN", ts: tsDaysAgo(0, 1), user: "UK", text: "what do you know about me?" }, "channel");
+    const prompt = backend.requests[1]!.prompt;
+    expect(prompt).toContain("<about_asker>");
+    expect(prompt).toContain("prefers short answers");
+    expect(prompt).toMatch(/<asker_schedules>\n#1 reminder: "Email the principal"/);
+    expect(prompt).toMatch(/<asker_time timezone="America\/New_York">/);
   });
 
   it("home channel: ignores empty messages instead of posting help", async () => {

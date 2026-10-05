@@ -1,5 +1,9 @@
 import type { CompletionRequest, ModelBackend } from "../src/backend/types.js";
 import type { ChannelInfo, Page, SlackApi, SlackMessage } from "../src/slack/api.js";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Profiles } from "../src/memory/profiles.js";
 import { openDb, Store } from "../src/store/db.js";
 
 export const TEAM_URL = "https://acme.slack.com/";
@@ -25,6 +29,7 @@ export class FakeSlack implements SlackApi {
   channels = new Map<string, FakeChannel>();
   users = new Map<string, { name: string; isBot: boolean }>([[BOT_USER, { name: "ghost", isBot: true }]]);
   posts: Array<{ channel: string; threadTs: string | undefined; text: string; ts: string }> = [];
+  scheduled: Array<{ id: string; channel: string; postAt: number; text: string; deleted?: boolean }> = [];
   reactions: Array<{ op: "add" | "remove"; channel: string; ts: string; name: string }> = [];
   calls: string[] = [];
   private seq = 0;
@@ -85,6 +90,17 @@ export class FakeSlack implements SlackApi {
     return { messages };
   }
 
+  async scheduleMessage(channel: string, postAt: number, text: string): Promise<string> {
+    const id = `Q${this.scheduled.length + 1}`;
+    this.scheduled.push({ id, channel, postAt, text });
+    return id;
+  }
+
+  async deleteScheduledMessage(_channel: string, id: string): Promise<void> {
+    const item = this.scheduled.find((s) => s.id === id);
+    if (item) item.deleted = true;
+  }
+
   async channelMembers(channelId: string): Promise<string[]> {
     this.calls.push(`members:${channelId}`);
     return this.channels.get(channelId)!.members;
@@ -93,7 +109,7 @@ export class FakeSlack implements SlackApi {
   async userInfo(userId: string) {
     const user = this.users.get(userId);
     if (!user) throw new Error(`user_not_found: ${userId}`);
-    return { id: userId, ...user };
+    return { id: userId, ...user, tz: "America/New_York" };
   }
 
   async post(channel: string, threadTs: string | undefined, text: string) {
@@ -131,4 +147,8 @@ export class FakeBackend implements ModelBackend {
 
 export function memoryStore(): Store {
   return new Store(openDb(":memory:"));
+}
+
+export function tempProfiles(): Profiles {
+  return new Profiles(join(mkdtempSync(join(tmpdir(), "ghost-profiles-")), "profiles"));
 }

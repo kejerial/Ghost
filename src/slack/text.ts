@@ -65,6 +65,7 @@ export function renderAnswer(modelText: string, sources: CitableSource[]): { tex
     return cited.length;
   };
 
+  const webSources = new Map<string, CitableSource>();
   let text = escapeMrkdwn(modelText.trim());
 
   // Keep blockquotes: a ">" at the start of a line is formatting, not a control sequence.
@@ -82,7 +83,12 @@ export function renderAnswer(modelText: string, sources: CitableSource[]): { tex
 
   // Markdown → Slack mrkdwn.
   text = text
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)|]+)\)/g, (_m, label: string, url: string) => `<${url}|${label}>`)
+    // Web links become numbered citations too. The label stays in the sentence; the link moves to Sources.
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)|]+)\)/g, (_m, label: string, url: string) => {
+      const source = webSources.get(url) ?? { id: url, url, label: decodeEntities(label) };
+      webSources.set(url, source);
+      return `${label} <${url}|[${numberOf(source)}]>`;
+    })
     .replace(/\*\*([^*\n]+)\*\*/g, "*$1*")
     .replace(/__([^_\n]+)__/g, "*$1*")
     .replace(/^#{1,6}\s+(.+)$/gm, "*$1*")

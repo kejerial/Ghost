@@ -7,6 +7,7 @@ const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** Resolves Slack user IDs to display names. Caches in memory and in SQLite. */
 export class UserDirectory {
   private readonly memory = new Map<string, string>();
+  private readonly zones = new Map<string, string>();
 
   constructor(
     private readonly api: SlackApi,
@@ -34,6 +35,19 @@ export class UserDirectory {
     } catch (error) {
       log.warn("users.info failed", { userId, ...errorFields(error) });
       return stored?.name ?? userId;
+    }
+  }
+
+  /** The user's IANA timezone from their Slack profile, for example "America/New_York". */
+  async timezone(userId: string): Promise<string> {
+    const hit = this.zones.get(userId);
+    if (hit) return hit;
+    try {
+      const tz = (await this.api.userInfo(userId)).tz ?? "UTC";
+      this.zones.set(userId, tz);
+      return tz;
+    } catch {
+      return "UTC";
     }
   }
 

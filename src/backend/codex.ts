@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BackendError, type CompletionRequest, type ModelBackend } from "./types.js";
+import { codexMcpArgs, mcpEnv, type McpServer } from "../integrations/mcp.js";
 import { childEnv, modelSandboxDir, runProcess, tail, type Runner } from "./subprocess.js";
 
 /**
@@ -32,7 +33,13 @@ export class CodexCliBackend implements ModelBackend {
   readonly name = "codex";
 
   constructor(
-    private readonly options: { model?: string; command?: string; run?: Runner; reasoningEffort?: string } = {},
+    private readonly options: {
+      model?: string;
+      command?: string;
+      run?: Runner;
+      reasoningEffort?: string;
+      mcpServers?: McpServer[];
+    } = {},
   ) {}
 
   args(outputFile: string): string[] {
@@ -52,6 +59,7 @@ export class CodexCliBackend implements ModelBackend {
       "-o", outputFile,
     ];
     for (const feature of DISABLED_FEATURES) args.push("--disable", feature);
+    args.push(...codexMcpArgs(this.options.mcpServers ?? []));
     if (this.options.model) args.push("-m", this.options.model);
     args.push("-"); // Read the prompt from stdin.
     return args;
@@ -67,7 +75,7 @@ export class CodexCliBackend implements ModelBackend {
       const result = await run(this.options.command ?? "codex", this.args(outputFile), {
         stdin,
         cwd: modelSandboxDir(),
-        env: childEnv(),
+        env: { ...childEnv(), ...mcpEnv(this.options.mcpServers ?? []) },
         timeoutMs: request.timeoutMs,
       });
       if (result.timedOut) throw new BackendError(`codex timed out after ${request.timeoutMs / 1000}s`);

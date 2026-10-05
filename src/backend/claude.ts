@@ -1,4 +1,5 @@
 import { BackendError, type CompletionRequest, type ModelBackend } from "./types.js";
+import { claudeMcpConfig, mcpEnv, type McpServer } from "../integrations/mcp.js";
 import { childEnv, modelSandboxDir, runProcess, tail, type Runner } from "./subprocess.js";
 
 /** Calls the logged-in `claude` CLI in print mode. Uses the Claude subscription, not API billing. */
@@ -6,16 +7,17 @@ export class ClaudeCliBackend implements ModelBackend {
   readonly name = "claude";
 
   constructor(
-    private readonly options: { model?: string; command?: string; run?: Runner } = {},
+    private readonly options: { model?: string; command?: string; run?: Runner; mcpServers?: McpServer[] } = {},
   ) {}
 
   args(system: string): string[] {
+    const servers = this.options.mcpServers ?? [];
     const args = [
       "-p",
       "--output-format", "json",
-      // Web search and fetch only: no shell, no file access.
+      // Web search, web fetch, and Ghost's connections only: no shell, no file access.
       "--tools", "WebSearch,WebFetch",
-      "--allowedTools", "WebSearch,WebFetch",
+      "--allowedTools", ["WebSearch", "WebFetch", ...servers.map((s) => `mcp__${s.name}`)].join(","),
       "--strict-mcp-config",
       "--disable-slash-commands",
       "--no-session-persistence",
@@ -23,6 +25,7 @@ export class ClaudeCliBackend implements ModelBackend {
       "--setting-sources", "",
       "--system-prompt", system,
     ];
+    if (servers.length) args.push("--mcp-config", claudeMcpConfig(servers));
     if (this.options.model) args.push("--model", this.options.model);
     return args;
   }
@@ -32,7 +35,7 @@ export class ClaudeCliBackend implements ModelBackend {
     const result = await run(this.options.command ?? "claude", this.args(request.system), {
       stdin: request.prompt,
       cwd: modelSandboxDir(),
-      env: childEnv(),
+      env: { ...childEnv(), ...mcpEnv(this.options.mcpServers ?? []) },
       timeoutMs: request.timeoutMs,
     });
     if (result.timedOut) throw new BackendError(`claude timed out after ${request.timeoutMs / 1000}s`);

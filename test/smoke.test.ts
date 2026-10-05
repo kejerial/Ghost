@@ -11,7 +11,7 @@ import { FtsRetriever } from "../src/retrieval/search.js";
 import { UserDirectory } from "../src/slack/users.js";
 import { Syncer } from "../src/store/sync.js";
 import { Limiter } from "../src/util/limiter.js";
-import { BOT_ID, BOT_USER, FakeSlack, memoryStore, TEAM_URL, tsDaysAgo } from "./fakes.js";
+import { BOT_ID, BOT_USER, FakeSlack, memoryStore, TEAM_URL, tempProfiles, tsDaysAgo } from "./fakes.js";
 
 const enabled = process.env.GHOST_SMOKE === "1";
 const backendName = (process.env.GHOST_SMOKE_BACKEND ?? "claude") as "claude" | "codex";
@@ -47,6 +47,7 @@ describe.skipIf(!enabled)(`live backend: ${backendName}`, () => {
       identity,
       contextChars: 24000,
       modelTimeoutMs: 240_000,
+      profiles: tempProfiles(),
     });
     return { slack, ghost };
   }

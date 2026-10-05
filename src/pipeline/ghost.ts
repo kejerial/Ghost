@@ -8,6 +8,9 @@ import type { Store } from "../store/db.js";
 import type { Identity } from "../store/sync.js";
 import type { Limiter } from "../util/limiter.js";
 import { gatherRecent, gatherThread, type ContextMessage } from "./context.js";
+import { PROFILE_PROMPT, type Profiles } from "../memory/profiles.js";
+import { describe as describeSchedule, type Scheduler } from "../schedule/scheduler.js";
+import { extractDirectives, type Directive } from "./directives.js";
 import { buildPrompt } from "./prompt.js";
 
 export interface MentionEvent {
@@ -28,7 +31,13 @@ export interface GhostDeps {
   identity: Identity & { teamUrl: string };
   contextChars: number;
   modelTimeoutMs: number;
+  profiles: Profiles;
+  /** Set after construction, because the scheduler runs tasks through this Ghost. */
+  scheduler?: Scheduler;
 }
+
+/** Ghost drafts a profile once there are this many indexed messages from the user. */
+const PROFILE_MIN_MESSAGES = 5;
 
 const WORKING_REACTION = "eyes";
 
@@ -43,7 +52,13 @@ export interface Answer {
 }
 
 export class Ghost {
+  private readonly draftingProfiles = new Set<string>();
+
   constructor(private readonly deps: GhostDeps) {}
+
+  attachScheduler(scheduler: Scheduler): void {
+    this.deps.scheduler = scheduler;
+  }
 
   private isGhost = (m: SlackMessage): boolean =>
     m.user === this.deps.identity.botUserId || (this.deps.identity.botId !== undefined && m.bot_id === this.deps.identity.botId);
@@ -101,12 +116,14 @@ export class Ghost {
     const isThread = event.thread_ts !== undefined && event.thread_ts !== event.ts;
     const threadRootTs = event.thread_ts ?? event.ts;
 
-    const [thread, recent, askerName, channel] = await Promise.all([
+    const [thread, recent, askerName, channel, timezone] = await Promise.all([
       isThread ? gatherThread(api, users, this.isGhost, event.channel, threadRootTs) : Promise.resolve<ContextMessage[]>([]),
       gatherRecent(api, users, this.isGhost, event.channel, threadRootTs),
       event.user ? users.name(event.user) : Promise.resolve("someone"),
       this.channel(event.channel),
+      event.user ? users.timezone(event.user) : Promise.resolve(undefined),
     ]);
+    if (event.user) this.draftProfileOnce(event.user, askerName);
 
     // Do not show the mention itself as context. The question section already holds it.
     const threadContext = thread.filter((m) => m.ts !== event.ts);
@@ -124,14 +141,73 @@ export class Ghost {
       retrieved,
       teamUrl: identity.teamUrl,
       budget: this.deps.contextChars,
+      aboutAsker: event.user ? this.deps.profiles.read(event.user) : undefined,
+      timezone,
+      schedules: event.user && this.deps.scheduler ? this.deps.scheduler.list(event.user).map(describeSchedule) : undefined,
     });
     log.debug("prompt built", { chars: built.prompt.length, sources: built.sources.length, retrieved: retrieved.length });
 
     const raw = await limiter.run(() =>
       backend.complete({ system: built.system, prompt: built.prompt, timeoutMs: this.deps.modelTimeoutMs }),
     );
-    const rendered = renderAnswer(raw, built.sources);
-    return { text: rendered.text, sourceCount: built.sources.length, citedCount: rendered.cited };
+    const { text, directives } = extractDirectives(raw);
+    const notes = event.user ? await this.apply(directives, { userId: event.user, name: askerName, channelId: event.channel, tz: timezone ?? "UTC" }) : [];
+    const rendered = renderAnswer(text, built.sources);
+    const footer = notes.length ? `\n\n${notes.map((n) => `_${n}_`).join("\n")}` : "";
+    return { text: rendered.text + footer, sourceCount: built.sources.length, citedCount: rendered.cited };
+  }
+
+  /** Apply the model's directives for this user. Returns notes for anything that failed. */
+  private async apply(directives: Directive[], who: { userId: string; name: string; channelId: string; tz: string }): Promise<string[]> {
+    const { profiles, scheduler } = this.deps;
+    const notes: string[] = [];
+    for (const d of directives) {
+      try {
+        if (d.type === "remember") profiles.remember(who.userId, who.name, d.text);
+        else if (d.type === "forget") profiles.forget(who.userId, d.text);
+        else if (d.type === "schedule") {
+          if (!scheduler) throw new Error("scheduling is off");
+          const created = await scheduler.create(d.spec, { userId: who.userId, channelId: who.channelId, tz: who.tz });
+          log.info("schedule created", { id: created.id, kind: created.kind, nextRun: new Date(created.nextRun).toISOString(), cron: created.cron });
+        } else if (d.type === "cancel") {
+          if (!(await scheduler?.cancel(who.userId, d.id))) notes.push(`⚠️ I couldn't find schedule #${d.id}.`);
+        } else {
+          log.warn("invalid directive", { raw: d.raw, reason: d.reason });
+          notes.push(`⚠️ I couldn't set that up (${d.reason}). Try rephrasing the time.`);
+        }
+      } catch (error) {
+        log.warn("directive failed", { type: d.type, ...errorFields(error) });
+        notes.push(`⚠️ I couldn't set that up: ${error instanceof Error ? error.message : String(error)}.`);
+      }
+    }
+    return notes;
+  }
+
+  /** Draft a profile from the user's own indexed messages, once, in the background. */
+  private draftProfileOnce(userId: string, name: string): void {
+    const { profiles, store, backend, limiter } = this.deps;
+    if (profiles.exists(userId) || this.draftingProfiles.has(userId)) return;
+    const rows = store.db
+      .prepare(
+        `SELECT c.name AS channel, m.ts, m.clean_text AS text FROM messages m JOIN channels c ON c.id = m.channel_id
+         WHERE m.user_id = ? ORDER BY m.ts_num DESC LIMIT 300`,
+      )
+      .all(userId) as Array<{ channel: string; ts: string; text: string }>;
+    if (rows.length < PROFILE_MIN_MESSAGES) return;
+    this.draftingProfiles.add(userId);
+    const corpus = rows
+      .reverse()
+      .map((r) => `#${r.channel} ${new Date(Number(r.ts) * 1000).toISOString().slice(0, 10)}: ${r.text.slice(0, 500)}`)
+      .join("\n")
+      .slice(-30_000);
+    void limiter
+      .run(() => backend.complete({ system: PROFILE_PROMPT, prompt: `Messages written by ${name}:\n${corpus}`, timeoutMs: this.deps.modelTimeoutMs }))
+      .then((body) => {
+        if (!profiles.exists(userId) || !profiles.read(userId)?.includes("## Who they are")) profiles.writeProfile(userId, name, body);
+        log.info("profile drafted", { userId, messages: rows.length });
+      })
+      .catch((error) => log.warn("profile draft failed", { userId, ...errorFields(error) }))
+      .finally(() => this.draftingProfiles.delete(userId));
   }
 
   private async channel(channelId: string): Promise<{ name: string }> {

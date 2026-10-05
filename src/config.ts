@@ -19,6 +19,11 @@ const schema = z.object({
   GHOST_RESYNC_MINUTES: z.coerce.number().int().nonnegative().default(360),
   GHOST_CONTEXT_CHARS: z.coerce.number().int().min(4000).default(24000),
   GHOST_HOME_CHANNEL: optionalString,
+  GHOST_CONNECTIONS: z.enum(["inherit", "off"]).default("inherit"),
+  GHOST_CONNECTIONS_EXCLUDE: z
+    .string()
+    .default("")
+    .transform((v) => v.split(",").map((s) => s.trim()).filter(Boolean)),
   GHOST_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 
@@ -37,6 +42,9 @@ export interface Config {
   contextChars: number;
   /** Optional chat channel (name or ID). Ghost answers every message there, no tag needed. */
   homeChannel: string | undefined;
+  /** inherit: use the Codex CLI's connections (minus local-control ones) and GitHub via gh. */
+  connections: "inherit" | "off";
+  connectionsExclude: string[];
   logLevel: "debug" | "info" | "warn" | "error";
 }
 
@@ -63,6 +71,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     resyncMinutes: c.GHOST_RESYNC_MINUTES,
     contextChars: c.GHOST_CONTEXT_CHARS,
     homeChannel: c.GHOST_HOME_CHANNEL?.replace(/^#/, ""),
+    connections: c.GHOST_CONNECTIONS,
+    connectionsExclude: c.GHOST_CONNECTIONS_EXCLUDE,
     logLevel: c.GHOST_LOG_LEVEL,
   };
 }

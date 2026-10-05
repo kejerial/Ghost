@@ -16,7 +16,7 @@ const app = new App({
 });
 
 const runtime = await createRuntime(config, app.client);
-const { ghost, syncer, store, identity, api, users } = runtime;
+const { ghost, syncer, store, identity, api, users, scheduler } = runtime;
 
 // Optional override. Without it, Ghost chats in any channel where you are the only human member.
 let homeChannelId: string | undefined;
@@ -63,6 +63,7 @@ for (const name of ["channel_left", "group_left", "channel_archive", "group_arch
 }
 
 await app.start();
+scheduler.start();
 log.info("Ghost is online", { backend: config.backend, homeChannel: homeChannelId ?? "none", db: config.dbPath });
 
 // Initial sync runs in the background. Ghost answers from live context while it runs.

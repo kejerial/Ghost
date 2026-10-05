@@ -19,6 +19,7 @@
   "dependencies": {
     "@slack/bolt": "^5.1.0",
     "better-sqlite3": "^13.0.3",
+    "cron-parser": "^5.10.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {

@@ -17,9 +17,26 @@ Be specific and grounded, never generic:
 
 Use the web:
 - Search the web whenever it makes the answer better: current facts, prices, tools, how-tos, best practices, recommendations, or anything that may have changed.
-- Share the best 1–4 sources when they help: articles, docs, YouTube videos, threads. Link them with Markdown, for example [How to run a discovery call](https://example.com/article).
+- Share the best 1–4 sources when they help: articles, docs, YouTube videos, threads. Link them inline with Markdown, for example "YC's [How to Talk to Users](https://example.com/video) covers this." Ghost turns each link into a numbered citation and lists it once at the bottom.
 - Only include URLs that you actually opened or found in search results. Never invent a link.
 - Prefer primary and reputable sources. Say briefly why a link is worth opening.
+
+Connections:
+- You may have tools for connected services (GitHub, Linear, Apollo, and others). Use them whenever they help answer.
+- Read freely. Create, change, send, or delete something only when the asker explicitly asks for that in their current message.
+
+Memory:
+- <about_asker> is what you know about the person asking: their profile and saved memories. Use it to tailor every answer.
+- When they ask you to remember something, or state a lasting fact or preference about themselves, add a line: <<remember: one short fact>>
+- When they ask you to forget something, add: <<forget: a key phrase from that memory>>
+
+Reminders and scheduled work:
+- For "remind me…", add: <<schedule: {"kind":"reminder","text":"Email the principal","at":"2026-10-06T09:00:00-04:00"}>>
+- Use "kind":"task" when you must do work at that time (a summary, a check, a briefing). Then "text" is the instruction you will run, for example "Summarize what happened in #sales this week".
+- One-time: "at" is ISO 8601 with the asker's UTC offset from <asker_time>. Repeating: use "cron" (5 fields, asker's local time) instead of "at", for example "0 9 * * 1-5" for weekdays at 9am.
+- To cancel, add <<cancel: ID>> with an ID from <asker_schedules>. To list, read <asker_schedules>.
+- Confirm in plain words with the exact local day and time.
+- Lines in << >> are commands for Ghost. Ghost removes them before posting. Never show them any other way.
 
 Slack history and honesty:
 - Each Slack message in the context has an ID such as [S4]. When a statement comes from Slack, cite it inline with its ID, for example "We moved to annual pricing [S4]." Cite only IDs that exist in the context.
@@ -32,7 +49,7 @@ Slack history and honesty:
 Format (Slack):
 - Use *bold* sparingly, short bullet lists with "•" or "-", and no headings or tables.
 - Write people and channels as plain names, without Slack markup.
-- Do not write a Slack sources list. Ghost adds one from your [S#] citations.`;
+- Do not write a sources or links list. Ghost builds one from your [S#] citations and Markdown links.`;
 
 export interface PromptInput {
   question: string;
@@ -46,6 +63,12 @@ export interface PromptInput {
   /** Total character budget for all context sections. */
   budget: number;
   now?: Date;
+  /** The asker's profile and memories (Markdown). */
+  aboutAsker?: string;
+  /** The asker's IANA timezone. */
+  timezone?: string;
+  /** One line per active schedule of the asker. */
+  schedules?: string[];
 }
 
 export interface BuiltPrompt {
@@ -114,9 +137,23 @@ export function buildPrompt(input: PromptInput): BuiltPrompt {
       ? `<related_slack_history>\n${history.map(renderHistory).join("\n")}\n</related_slack_history>`
       : `<related_slack_history>\n(No related messages found in older Slack history.)\n</related_slack_history>`,
   );
+  if (input.aboutAsker) sections.push(`<about_asker>\n${input.aboutAsker}\n</about_asker>`);
+  if (input.timezone) sections.push(`<asker_time timezone="${input.timezone}">${localTime(now, input.timezone)}</asker_time>`);
+  if (input.schedules) {
+    sections.push(`<asker_schedules>\n${input.schedules.length ? input.schedules.join("\n") : "(none)"}\n</asker_schedules>`);
+  }
   sections.push(`<question asker="${input.askerName}" channel="#${input.channelName}">\n${input.question}\n</question>`);
 
   return { system: SYSTEM_PROMPT, prompt: sections.join("\n\n"), sources };
+}
+
+/** For example "Mon, Oct 5, 2026, 4:55 PM (UTC-04:00)". */
+export function localTime(now: Date, timeZone: string): string {
+  const when = now.toLocaleString("en-US", { timeZone, weekday: "short", year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const offset = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" })
+    .formatToParts(now)
+    .find((p) => p.type === "timeZoneName")?.value.replace("GMT", "UTC");
+  return `${when} (${offset === "UTC" ? "UTC+00:00" : offset})`;
 }
 
 function sum(values: number[]): number {

@@ -36,7 +36,10 @@ export interface SlackApi {
   channelInfo(channelId: string): Promise<ChannelInfo>;
   history(channelId: string, options: { oldest?: string; latest?: string; limit: number; cursor?: string }): Promise<Page>;
   replies(channelId: string, threadTs: string, options: { limit: number; cursor?: string; oldest?: string }): Promise<Page>;
-  userInfo(userId: string): Promise<{ id: string; name: string; isBot: boolean }>;
+  userInfo(userId: string): Promise<{ id: string; name: string; isBot: boolean; tz?: string }>;
+  /** Slack posts the message at `postAt` (Unix seconds), even if Ghost is offline. Returns the scheduled message ID. */
+  scheduleMessage(channelId: string, postAt: number, text: string): Promise<string>;
+  deleteScheduledMessage(channelId: string, scheduledMessageId: string): Promise<void>;
   channelMembers(channelId: string): Promise<string[]>;
   /** Post a message. Without `threadTs`, the message goes to the channel itself. */
   post(channelId: string, threadTs: string | undefined, text: string): Promise<{ ts: string }>;
@@ -113,7 +116,16 @@ export function slackApiFrom(client: WebClient): SlackApi {
       const r = await client.users.info({ user: userId });
       const u = r.user!;
       const name = u.profile?.display_name || u.profile?.real_name || u.real_name || u.name || userId;
-      return { id: userId, name, isBot: Boolean(u.is_bot) };
+      return { id: userId, name, isBot: Boolean(u.is_bot), tz: u.tz };
+    },
+
+    async scheduleMessage(channelId, postAt, text) {
+      const r = await client.chat.scheduleMessage({ channel: channelId, post_at: postAt, text, unfurl_links: false, unfurl_media: false });
+      return r.scheduled_message_id!;
+    },
+
+    async deleteScheduledMessage(channelId, scheduledMessageId) {
+      await client.chat.deleteScheduledMessage({ channel: channelId, scheduled_message_id: scheduledMessageId });
     },
 
     async post(channelId, threadTs, text) {
