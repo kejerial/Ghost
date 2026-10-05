@@ -82,6 +82,8 @@ export interface BuiltPrompt {
 }
 
 const MAX_MESSAGE_CHARS = 1500;
+/** Ghost's own replies stay (nearly) whole, so it can answer "what did you mean by…". */
+const MAX_GHOST_CHARS = 4000;
 const LINE_OVERHEAD = 60;
 
 function clip(text: string, max = MAX_MESSAGE_CHARS): string {
@@ -89,7 +91,7 @@ function clip(text: string, max = MAX_MESSAGE_CHARS): string {
   return flat.length <= max ? flat : `${flat.slice(0, max)}…`;
 }
 
-const contextCost = (m: ContextMessage) => Math.min(m.text.length, m.isGhost ? 600 : MAX_MESSAGE_CHARS) + LINE_OVERHEAD;
+const contextCost = (m: ContextMessage) => Math.min(m.text.length, m.isGhost ? MAX_GHOST_CHARS : MAX_MESSAGE_CHARS) + LINE_OVERHEAD;
 const historyCost = (h: RetrievedMessage) =>
   Math.min(h.text.length, MAX_MESSAGE_CHARS) + Math.min(h.parent?.text.length ?? 0, 300) + LINE_OVERHEAD * 2;
 
@@ -100,7 +102,8 @@ const historyCost = (h: RetrievedMessage) =>
  */
 export function buildPrompt(input: PromptInput): BuiltPrompt {
   const thread = input.isThread ? selectThread(input.thread, Math.floor(input.budget * 0.45)) : { kept: [], omitted: 0 };
-  const recent = selectNewest(input.recent, Math.floor(input.budget * 0.15), contextCost);
+  // Outside a thread, the recent channel messages are the conversation itself, so they get the thread's share.
+  const recent = selectNewest(input.recent, Math.floor(input.budget * (input.isThread ? 0.15 : 0.6)), contextCost);
   // History gets the remaining budget, including what the thread and recent sections left unused.
   const used = sum(thread.kept.map(contextCost)) + sum(recent.map(contextCost));
   const history = selectHistory(input.retrieved, input.budget - used);
@@ -116,7 +119,7 @@ export function buildPrompt(input: PromptInput): BuiltPrompt {
     return id;
   };
   const renderContext = (m: ContextMessage): string => {
-    if (m.isGhost) return `(Ghost) ${formatDate(m.ts)} · Ghost: ${clip(m.text, 600)}`;
+    if (m.isGhost) return `(Ghost) ${formatDate(m.ts)} · Ghost: ${clip(m.text, MAX_GHOST_CHARS)}`;
     const id = cite(m.channelId, input.channelName, m.ts, m.threadTs, m.userName);
     return `[${id}] ${formatDate(m.ts)} · ${m.userName}: ${clip(m.text)}`;
   };

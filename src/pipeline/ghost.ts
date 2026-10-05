@@ -155,7 +155,7 @@ export class Ghost {
 
     const [thread, recent, askerName, channel, timezone] = await Promise.all([
       isThread ? gatherThread(api, users, this.isGhost, event.channel, threadRootTs) : Promise.resolve<ContextMessage[]>([]),
-      gatherRecent(api, users, this.isGhost, event.channel, threadRootTs),
+      gatherRecent(api, users, this.isGhost, event.channel, threadRootTs, isThread ? 15 : 30),
       event.user ? users.name(event.user) : Promise.resolve("someone"),
       this.channel(event.channel),
       event.user ? users.timezone(event.user) : Promise.resolve(undefined),

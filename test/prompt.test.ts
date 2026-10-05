@@ -55,6 +55,18 @@ describe("buildPrompt", () => {
     expect(built.prompt).toContain('<question asker="Kevin" channel="#general">');
   });
 
+  it("keeps Ghost's own long reply whole in a channel chat, so it knows what it said", () => {
+    const longReply = `${"Point. ".repeat(400)}Move the required AI-use question into the call.`;
+    const built = buildPrompt(
+      base({
+        isThread: false,
+        recent: [msg(tsDaysAgo(0.01), "how do I improve my landing page?"), msg(tsDaysAgo(0.005), longReply, { isGhost: true })],
+        question: "wdym by required ai use question",
+      }),
+    );
+    expect(built.prompt).toContain("Move the required AI-use question into the call.");
+  });
+
   it("never gives Ghost's own messages a source ID", () => {
     const built = buildPrompt(base({ thread: [msg(tsDaysAgo(1), "q"), msg(tsDaysAgo(1, 1), "my answer", { isGhost: true })] }));
     expect(built.sources).toHaveLength(1);
