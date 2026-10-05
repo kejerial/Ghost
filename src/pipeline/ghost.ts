@@ -8,7 +8,7 @@ import type { Store } from "../store/db.js";
 import type { Identity } from "../store/sync.js";
 import type { Limiter } from "../util/limiter.js";
 import { gatherRecent, gatherThread, type ContextMessage } from "./context.js";
-import type { Connections } from "../integrations/mcp.js";
+import { displayName, type Connections } from "../integrations/mcp.js";
 import { PROFILE_PROMPT, type Profiles } from "../memory/profiles.js";
 import { describe as describeSchedule, type Scheduler } from "../schedule/scheduler.js";
 import { extractDirectives, type Directive } from "./directives.js";
@@ -57,6 +57,21 @@ export interface Answer {
 
 export class Ghost {
   private readonly draftingProfiles = new Set<string>();
+  /** Answers and logins still running. A shutdown waits for them (see drain). */
+  private readonly active = new Set<Promise<unknown>>();
+
+  /** Wait for in-flight work to finish, up to `timeoutMs`. Used on shutdown so a restart loses nothing. */
+  async drain(timeoutMs: number): Promise<number> {
+    const pending = this.active.size;
+    if (pending) await Promise.race([Promise.allSettled([...this.active]), new Promise((r) => setTimeout(r, timeoutMs))]);
+    return pending;
+  }
+
+  private track<T>(work: Promise<T>): Promise<T> {
+    this.active.add(work);
+    void work.finally(() => this.active.delete(work)).catch(() => undefined);
+    return work;
+  }
 
   constructor(private readonly deps: GhostDeps) {}
 
@@ -72,7 +87,11 @@ export class Ghost {
    * - `thread` (default, for @mentions): reply in the message's thread.
    * - `channel` (home channel): reply in the channel, or in the thread when the message is in one.
    */
-  async handleMention(event: MentionEvent, placement: "thread" | "channel" = "thread"): Promise<void> {
+  handleMention(event: MentionEvent, placement: "thread" | "channel" = "thread"): Promise<void> {
+    return this.track(this.handleMentionNow(event, placement));
+  }
+
+  private async handleMentionNow(event: MentionEvent, placement: "thread" | "channel"): Promise<void> {
     const { api, store } = this.deps;
     if (!store.claimEvent(`mention:${event.channel}:${event.ts}`)) {
       log.debug("duplicate mention ignored", { channel: event.channel, ts: event.ts });
@@ -94,7 +113,7 @@ export class Ghost {
       const started = Date.now();
       const answer = await this.answer(event, question);
       await api.post(event.channel, replyThreadTs, answer.text);
-      for (const name of answer.logins) void this.loginThenAnswer(name, event, question, replyThreadTs);
+      for (const name of answer.logins) void this.track(this.loginThenAnswer(name, event, question, replyThreadTs));
       log.info("answered", {
         channel: event.channel,
         ts: event.ts,
@@ -211,29 +230,37 @@ export class Ghost {
    */
   private async loginThenAnswer(name: string, event: MentionEvent, question: string, replyThreadTs: string | undefined): Promise<void> {
     const { api, connections } = this.deps;
+    const label = displayName(name);
     log.info("connection login started", { name });
     let ok = false;
+    let announced: Promise<unknown> = Promise.resolve();
+    const announce = () =>
+      (announced = api.post(event.channel, replyThreadTs, `✅ ${label} is connected. Checking on that now…`).catch(() => undefined));
     try {
       ok = await connections!.login(name, (url) => {
         void api
-          .post(event.channel, replyThreadTs, `🔑 <${url}|Sign in to ${name}>. The page should also be open in your browser on your Mac.`)
+          .post(event.channel, replyThreadTs, `🔑 <${url}|Sign in to ${label}>. The page should also be open in your browser on your Mac.`)
           .catch(() => undefined);
-      });
+      }, announce);
     } catch (error) {
       log.warn("connection login failed", { name, ...errorFields(error) });
     }
     log.info("connection login finished", { name, ok });
     if (!ok) {
-      await api.post(event.channel, replyThreadTs, `⚠️ The ${name} login didn't finish. Ask again and I'll reopen it.`).catch(() => undefined);
+      await api.post(event.channel, replyThreadTs, `⚠️ The ${label} login didn't finish. Ask again and I'll reopen it.`).catch(() => undefined);
       return;
     }
+    // The confirmation went out as soon as the login finished; the answer below can take a while.
+    await announced;
     await api.addReaction(event.channel, event.ts, WORKING_REACTION).catch(() => undefined);
     try {
+      const started = Date.now();
       const retry = await this.answer(event, question);
       await api.post(event.channel, replyThreadTs, retry.text);
+      log.info("answered after login", { name, ms: Date.now() - started });
     } catch (error) {
       log.error("answer after login failed", { name, ...errorFields(error) });
-      await api.post(event.channel, replyThreadTs, `✅ ${name} is connected, but my answer failed. Ask again.`).catch(() => undefined);
+      await api.post(event.channel, replyThreadTs, `Sorry, my answer failed after the ${label} login. Ask again and I'll use it.`).catch(() => undefined);
     } finally {
       await api.removeReaction(event.channel, event.ts, WORKING_REACTION).catch(() => undefined);
     }

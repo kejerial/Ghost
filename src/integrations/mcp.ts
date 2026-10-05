@@ -110,7 +110,7 @@ export class Connections {
    * `onUrl` receives the sign-in link as soon as Codex prints it, so Ghost can also post it.
    * Resolves when the login finishes or times out (5 minutes).
    */
-  async login(name: string, onUrl?: (url: string) => void): Promise<boolean> {
+  async login(name: string, onUrl?: (url: string) => void, onSignedIn?: () => void): Promise<boolean> {
     await this.refresh();
     if (!this.loginable.includes(name)) throw new Error(`"${name}" is not a connection that supports login`);
     let seen = false;
@@ -129,6 +129,7 @@ export class Connections {
       timeoutMs: LOGIN_TIMEOUT_MS,
       onOutput,
     }).catch(() => undefined);
+    if (result?.code === 0) onSignedIn?.(); // before the reload, so the user hears back at once
     await this.refresh(true);
     return result?.code === 0 && this.servers.some((s) => s.name === name);
   }
@@ -171,6 +172,15 @@ export class Connections {
     this.loadedAt = Date.now();
     if (changed) log.info("connections loaded", { connections: servers.map((s) => s.name), needsLogin: status.needsLogin });
   }
+}
+
+/** A readable name for a connection: "figma-remote-mcp" → "Figma", "linear" → "Linear". */
+export function displayName(name: string): string {
+  const words = name
+    .split(/[-_]/)
+    .filter((w) => w && !["mcp", "remote", "server"].includes(w.toLowerCase()));
+  const pretty = (words.length ? words : [name]).map((w) => w[0]!.toUpperCase() + w.slice(1)).join(" ");
+  return pretty;
 }
 
 /** Env values that every model call needs for its connections. */

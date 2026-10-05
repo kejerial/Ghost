@@ -192,9 +192,10 @@ describe("Ghost.handleMention", () => {
       servers: [],
       needsLogin: ["granola"],
       refresh: async () => undefined,
-      login: async (name: string, onUrl?: (url: string) => void) => {
+      login: async (name: string, onUrl?: (url: string) => void, onSignedIn?: () => void) => {
         logins.push(name);
         onUrl?.("https://granola.test/oauth?state=abc");
+        onSignedIn?.();
         setTimeout(loggedIn, 0);
         return true;
       },
@@ -208,7 +209,8 @@ describe("Ghost.handleMention", () => {
     expect(logins).toEqual(["granola"]);
     expect(slack.posts.map((p) => p.text)).toEqual([
       "Opening the granola sign-in now.",
-      "🔑 <https://granola.test/oauth?state=abc|Sign in to granola>. The page should also be open in your browser on your Mac.",
+      "🔑 <https://granola.test/oauth?state=abc|Sign in to Granola>. The page should also be open in your browser on your Mac.",
+      "✅ Granola is connected. Checking on that now…",
       "Your last meeting was the Lin pilot sync.",
     ]);
     expect(backend.requests[0]!.prompt).toContain("Needs login: granola");

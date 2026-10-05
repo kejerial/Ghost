@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { extractDirectives } from "../src/pipeline/directives.js";
-import { claudeMcpConfig, codexMcpArgs, Connections, fromCodexList, mcpEnv } from "../src/integrations/mcp.js";
+import { claudeMcpConfig, codexMcpArgs, Connections, displayName, fromCodexList, mcpEnv } from "../src/integrations/mcp.js";
 import { localTime } from "../src/pipeline/prompt.js";
 import { Scheduler, nextCron, parseLocalTime } from "../src/schedule/scheduler.js";
 import { FakeSlack, memoryStore, tempProfiles } from "./fakes.js";
@@ -283,5 +283,17 @@ describe("review fixes", () => {
   it("10: the Claude config skips Codex OAuth servers it cannot authenticate", () => {
     const config = JSON.parse(claudeMcpConfig([{ name: "apollo", type: "http", url: "https://mcp.apollo.io/mcp" }]));
     expect(config.mcpServers).toEqual({});
+  });
+});
+
+describe("displayName", () => {
+  it("makes connection names readable", () => {
+    expect(["granola", "figma-remote-mcp", "railway-mcp-server", "linear-kevinjeon", "context7"].map(displayName)).toEqual([
+      "Granola",
+      "Figma",
+      "Railway",
+      "Linear Kevinjeon",
+      "Context7",
+    ]);
   });
 });

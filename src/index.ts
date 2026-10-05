@@ -74,7 +74,10 @@ setInterval(() => store.pruneEvents(24 * 60 * 60 * 1000), 60 * 60 * 1000).unref(
 
 const shutdown = async (signal: string) => {
   log.info("shutting down", { signal });
-  await app.stop().catch(() => undefined);
+  scheduler.stop();
+  await app.stop().catch(() => undefined); // stop taking new events; replies still post through the Web API
+  const pending = await ghost.drain(60_000);
+  if (pending) log.info("finished in-flight work before exit", { pending });
   store.db.close();
   process.exit(0);
 };

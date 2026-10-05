@@ -34,12 +34,15 @@ case "${1:-}" in
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>
+  <key>ExitTimeOut</key><integer>90</integer>
   <key>StandardOutPath</key><string>$LOG</string>
   <key>StandardErrorPath</key><string>$LOG</string>
 </dict>
 </plist>
 EOF
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+    # bootout returns before the old process exits (Ghost drains in-flight work first). Wait for it.
+    for _ in {1..90}; do launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break; sleep 1; done
     launchctl bootstrap "$DOMAIN" "$PLIST"
     echo "Ghost is running in the background. Log: $LOG"
     ;;
