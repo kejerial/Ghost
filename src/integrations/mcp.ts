@@ -42,14 +42,11 @@ interface CodexMcpEntry {
 /**
  * Convert `codex mcp list --json` output into servers. Skips disabled ones, local-control ones,
  * and OAuth connections you have not logged in to (they would fail on every call).
- * Log in with `codex mcp login <name>`, then restart Ghost.
  */
 export function fromCodexList(entries: CodexMcpEntry[], exclude: string[] = []): McpServer[] {
-  const blocked = new Set([...LOCAL_CONTROL_SERVERS, ...exclude]);
   const servers: McpServer[] = [];
-  for (const entry of entries) {
-    if (!entry.enabled || blocked.has(entry.name) || entry.auth_status === "not_logged_in") continue;
-    if (!/^[A-Za-z0-9_-]+$/.test(entry.name)) continue;
+  for (const entry of usable(entries, exclude)) {
+    if (entry.auth_status === "not_logged_in") continue;
     const t = entry.transport;
     if (t.type === "streamable_http" && t.url) {
       servers.push({ name: entry.name, type: "http", url: t.url, bearerEnvVar: t.bearer_token_env_var ?? undefined });
@@ -68,42 +65,93 @@ export function fromCodexList(entries: CodexMcpEntry[], exclude: string[] = []):
   return servers;
 }
 
+/** Remote (OAuth-capable) connections: the ones `codex mcp login <name>` can sign in to. */
+export function loginStatus(entries: CodexMcpEntry[], exclude: string[] = []): { loginable: string[]; needsLogin: string[] } {
+  const remote = usable(entries, exclude).filter((e) => e.transport.type === "streamable_http");
+  return {
+    loginable: remote.map((e) => e.name),
+    needsLogin: remote.filter((e) => e.auth_status === "not_logged_in").map((e) => e.name),
+  };
+}
+
+function usable(entries: CodexMcpEntry[], exclude: string[]): CodexMcpEntry[] {
+  const blocked = new Set([...LOCAL_CONTROL_SERVERS, ...exclude]);
+  return entries.filter((e) => e.enabled && !blocked.has(e.name) && /^[A-Za-z0-9_-]+$/.test(e.name));
+}
+
+const REFRESH_MS = 5 * 60_000;
+const LOGIN_TIMEOUT_MS = 5 * 60_000;
+
 /**
- * Load the connections Ghost can use:
- * 1. Every connection configured in your Codex CLI, minus local-control ones.
- * 2. GitHub (read-only), through your `gh` login, if Codex has no "github" connection.
+ * The connections Ghost can use, kept current:
+ * 1. Every connection configured in your Codex CLI, minus local-control and logged-out ones.
+ * 2. GitHub (read-only) through your `gh` login, if Codex has no "github" connection.
+ * It also knows which connections need a login, and can start one (`codex mcp login`).
  */
-export async function loadMcpServers(options: { mode: "inherit" | "off"; exclude: string[]; run?: Runner }): Promise<McpServer[]> {
-  if (options.mode === "off") return [];
-  const run = options.run ?? runProcess;
-  const exec = (command: string, args: string[]) =>
-    run(command, args, { stdin: "", cwd: modelSandboxDir(), env: childEnv(), timeoutMs: 20_000 }).catch(() => undefined);
+export class Connections {
+  servers: McpServer[] = [];
+  needsLogin: string[] = [];
+  private loginable: string[] = [];
+  private loadedAt = 0;
+  private loading: Promise<void> | undefined;
 
-  const servers: McpServer[] = [];
-  const codex = await exec("codex", ["mcp", "list", "--json"]);
-  if (codex?.code === 0) {
-    try {
-      servers.push(...fromCodexList(JSON.parse(codex.stdout) as CodexMcpEntry[], options.exclude));
-    } catch (error) {
-      log.warn("could not read codex mcp list", errorFields(error));
-    }
+  constructor(private readonly options: { mode: "inherit" | "off"; exclude: string[]; run?: Runner }) {}
+
+  /** Reload from the Codex CLI. Without `force`, at most every 5 minutes. */
+  refresh(force = false): Promise<void> {
+    if (this.options.mode === "off") return Promise.resolve();
+    if (!force && Date.now() - this.loadedAt < REFRESH_MS) return Promise.resolve();
+    this.loading ??= this.load().finally(() => (this.loading = undefined));
+    return this.loading;
   }
 
-  if (!servers.some((s) => s.name === "github") && !options.exclude.includes("github")) {
-    const gh = await exec("gh", ["auth", "token"]);
-    const token = gh?.code === 0 ? gh.stdout.trim() : "";
-    if (token) {
-      servers.push({
-        name: "github",
-        type: "http",
-        url: "https://api.githubcopilot.com/mcp/readonly",
-        bearerEnvVar: "GITHUB_MCP_TOKEN",
-        env: { GITHUB_MCP_TOKEN: token },
-      });
-    }
+  /** Open the sign-in page for a connection in the browser on this Mac, and wait for it to finish. */
+  async login(name: string): Promise<boolean> {
+    await this.refresh();
+    if (!this.loginable.includes(name)) throw new Error(`"${name}" is not a connection that supports login`);
+    const result = await this.exec("codex", ["mcp", "login", name], LOGIN_TIMEOUT_MS);
+    await this.refresh(true);
+    return result?.code === 0 && this.servers.some((s) => s.name === name);
   }
-  log.info("connections loaded", { connections: servers.map((s) => s.name) });
-  return servers;
+
+  private exec(command: string, args: string[], timeoutMs = 20_000) {
+    const run = this.options.run ?? runProcess;
+    return run(command, args, { stdin: "", cwd: modelSandboxDir(), env: childEnv(), timeoutMs }).catch(() => undefined);
+  }
+
+  private async load(): Promise<void> {
+    const servers: McpServer[] = [];
+    let status = { loginable: [] as string[], needsLogin: [] as string[] };
+    const codex = await this.exec("codex", ["mcp", "list", "--json"]);
+    if (codex?.code === 0) {
+      try {
+        const entries = JSON.parse(codex.stdout) as CodexMcpEntry[];
+        servers.push(...fromCodexList(entries, this.options.exclude));
+        status = loginStatus(entries, this.options.exclude);
+      } catch (error) {
+        log.warn("could not read codex mcp list", errorFields(error));
+      }
+    }
+    if (!servers.some((s) => s.name === "github") && !this.options.exclude.includes("github")) {
+      const gh = await this.exec("gh", ["auth", "token"]);
+      const token = gh?.code === 0 ? gh.stdout.trim() : "";
+      if (token) {
+        servers.push({
+          name: "github",
+          type: "http",
+          url: "https://api.githubcopilot.com/mcp/readonly",
+          bearerEnvVar: "GITHUB_MCP_TOKEN",
+          env: { GITHUB_MCP_TOKEN: token },
+        });
+      }
+    }
+    const changed = servers.map((s) => s.name).join() !== this.servers.map((s) => s.name).join();
+    this.servers = servers;
+    this.loginable = status.loginable;
+    this.needsLogin = status.needsLogin;
+    this.loadedAt = Date.now();
+    if (changed) log.info("connections loaded", { connections: servers.map((s) => s.name), needsLogin: status.needsLogin });
+  }
 }
 
 /** Env values that every model call needs for its connections. */

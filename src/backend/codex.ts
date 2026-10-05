@@ -38,7 +38,8 @@ export class CodexCliBackend implements ModelBackend {
       command?: string;
       run?: Runner;
       reasoningEffort?: string;
-      mcpServers?: McpServer[];
+      /** The current connections; read on every call so new logins apply at once. */
+      mcpServers?: () => McpServer[];
     } = {},
   ) {}
 
@@ -59,7 +60,7 @@ export class CodexCliBackend implements ModelBackend {
       "-o", outputFile,
     ];
     for (const feature of DISABLED_FEATURES) args.push("--disable", feature);
-    args.push(...codexMcpArgs(this.options.mcpServers ?? []));
+    args.push(...codexMcpArgs(this.options.mcpServers?.() ?? []));
     if (this.options.model) args.push("-m", this.options.model);
     args.push("-"); // Read the prompt from stdin.
     return args;
@@ -75,7 +76,7 @@ export class CodexCliBackend implements ModelBackend {
       const result = await run(this.options.command ?? "codex", this.args(outputFile), {
         stdin,
         cwd: modelSandboxDir(),
-        env: { ...childEnv(), ...mcpEnv(this.options.mcpServers ?? []) },
+        env: { ...childEnv(), ...mcpEnv(this.options.mcpServers?.() ?? []) },
         timeoutMs: request.timeoutMs,
       });
       if (result.timedOut) throw new BackendError(`codex timed out after ${request.timeoutMs / 1000}s`);

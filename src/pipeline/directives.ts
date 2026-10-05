@@ -4,6 +4,7 @@
  *   <<forget: short answers>>
  *   <<schedule: {"kind":"reminder","text":"Email the principal","at":"2026-10-06T09:00:00-04:00"}>>
  *   <<cancel: 12>>
+ *   <<connect: linear>>   (open the sign-in page for a connection on the owner's Mac)
  * Ghost applies them and removes them from the posted text.
  */
 
@@ -21,9 +22,10 @@ export type Directive =
   | { type: "forget"; text: string }
   | { type: "schedule"; spec: ScheduleSpec }
   | { type: "cancel"; id: number }
+  | { type: "connect"; name: string }
   | { type: "invalid"; raw: string; reason: string };
 
-const PATTERN = /<<\s*(remember|forget|schedule|cancel)\s*:\s*([\s\S]*?)>>/gi;
+const PATTERN = /<<\s*(remember|forget|schedule|cancel|connect)\s*:\s*([\s\S]*?)>>/gi;
 
 export function extractDirectives(modelText: string): { text: string; directives: Directive[] } {
   const directives: Directive[] = [];
@@ -37,6 +39,9 @@ export function extractDirectives(modelText: string): { text: string; directives
 function parse(name: string, body: string, raw: string): Directive {
   if (name === "remember" || name === "forget") {
     return body ? { type: name, text: body } : { type: "invalid", raw, reason: "empty" };
+  }
+  if (name === "connect") {
+    return /^[A-Za-z0-9_-]+$/.test(body) ? { type: "connect", name: body } : { type: "invalid", raw, reason: "bad connection name" };
   }
   if (name === "cancel") {
     const id = Number(body.replace(/^#/, ""));

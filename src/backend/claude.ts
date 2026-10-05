@@ -7,11 +7,11 @@ export class ClaudeCliBackend implements ModelBackend {
   readonly name = "claude";
 
   constructor(
-    private readonly options: { model?: string; command?: string; run?: Runner; mcpServers?: McpServer[] } = {},
+    private readonly options: { model?: string; command?: string; run?: Runner; mcpServers?: () => McpServer[] } = {},
   ) {}
 
   args(system: string): string[] {
-    const servers = this.options.mcpServers ?? [];
+    const servers = this.options.mcpServers?.() ?? [];
     const args = [
       "-p",
       "--output-format", "json",
@@ -35,7 +35,7 @@ export class ClaudeCliBackend implements ModelBackend {
     const result = await run(this.options.command ?? "claude", this.args(request.system), {
       stdin: request.prompt,
       cwd: modelSandboxDir(),
-      env: { ...childEnv(), ...mcpEnv(this.options.mcpServers ?? []) },
+      env: { ...childEnv(), ...mcpEnv(this.options.mcpServers?.() ?? []) },
       timeoutMs: request.timeoutMs,
     });
     if (result.timedOut) throw new BackendError(`claude timed out after ${request.timeoutMs / 1000}s`);

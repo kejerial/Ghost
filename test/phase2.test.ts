@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { extractDirectives } from "../src/pipeline/directives.js";
-import { claudeMcpConfig, codexMcpArgs, fromCodexList, mcpEnv } from "../src/integrations/mcp.js";
+import { claudeMcpConfig, codexMcpArgs, Connections, fromCodexList, mcpEnv } from "../src/integrations/mcp.js";
 import { localTime } from "../src/pipeline/prompt.js";
 import { Scheduler, nextCron } from "../src/schedule/scheduler.js";
 import { FakeSlack, memoryStore, tempProfiles } from "./fakes.js";
@@ -137,5 +137,50 @@ describe("localTime", () => {
   it("shows the local time with its UTC offset", () => {
     expect(localTime(new Date("2026-10-05T20:55:00Z"), "America/New_York")).toBe("Mon, Oct 5, 2026, 4:55 PM (UTC-04:00)");
     expect(localTime(new Date("2026-10-05T20:55:00Z"), "UTC")).toBe("Mon, Oct 5, 2026, 8:55 PM (UTC+00:00)");
+  });
+});
+
+describe("Connections login", () => {
+  function fakeCodex() {
+    let linearLoggedIn = false;
+    const calls: string[][] = [];
+    const run = async (command: string, args: string[]) => {
+      calls.push([command, ...args]);
+      if (command === "gh") return { stdout: "", stderr: "", code: 1, timedOut: false };
+      if (args[1] === "login") {
+        linearLoggedIn = true;
+        return { stdout: "", stderr: "", code: 0, timedOut: false };
+      }
+      const list = [
+        { name: "linear", enabled: true, auth_status: linearLoggedIn ? "o_auth" : "not_logged_in", transport: { type: "streamable_http", url: "https://mcp.linear.app/mcp" } },
+        { name: "railway", enabled: true, auth_status: "unsupported", transport: { type: "stdio", command: "railway", args: ["mcp"] } },
+      ];
+      return { stdout: JSON.stringify(list), stderr: "", code: 0, timedOut: false };
+    };
+    return { run, calls };
+  }
+
+  it("reports logged-out connections, runs codex mcp login, and picks up the new connection", async () => {
+    const { run, calls } = fakeCodex();
+    const connections = new Connections({ mode: "inherit", exclude: [], run });
+    await connections.refresh(true);
+    expect(connections.servers.map((s) => s.name)).toEqual(["railway"]);
+    expect(connections.needsLogin).toEqual(["linear"]);
+
+    expect(await connections.login("linear")).toBe(true);
+    expect(calls).toContainEqual(["codex", "mcp", "login", "linear"]);
+    expect(connections.servers.map((s) => s.name)).toEqual(["linear", "railway"]);
+    expect(connections.needsLogin).toEqual([]);
+  });
+
+  it("refuses to log in to stdio or unknown connections", async () => {
+    const connections = new Connections({ mode: "inherit", exclude: [], run: fakeCodex().run });
+    await expect(connections.login("railway")).rejects.toThrow(/is not a connection that supports login/);
+    await expect(connections.login("nope")).rejects.toThrow(/is not a connection that supports login/);
+  });
+
+  it("parses the connect directive", () => {
+    expect(extractDirectives("Opening it now.\n<<connect: linear>>").directives).toEqual([{ type: "connect", name: "linear" }]);
+    expect(extractDirectives("<<connect: ../evil>>").directives[0]).toMatchObject({ type: "invalid" });
   });
 });

@@ -8,6 +8,7 @@ import type { Store } from "../store/db.js";
 import type { Identity } from "../store/sync.js";
 import type { Limiter } from "../util/limiter.js";
 import { gatherRecent, gatherThread, type ContextMessage } from "./context.js";
+import type { Connections } from "../integrations/mcp.js";
 import { PROFILE_PROMPT, type Profiles } from "../memory/profiles.js";
 import { describe as describeSchedule, type Scheduler } from "../schedule/scheduler.js";
 import { extractDirectives, type Directive } from "./directives.js";
@@ -32,6 +33,7 @@ export interface GhostDeps {
   contextChars: number;
   modelTimeoutMs: number;
   profiles: Profiles;
+  connections?: Connections;
   /** Set after construction, because the scheduler runs tasks through this Ghost. */
   scheduler?: Scheduler;
 }
@@ -124,6 +126,8 @@ export class Ghost {
       event.user ? users.timezone(event.user) : Promise.resolve(undefined),
     ]);
     if (event.user) this.draftProfileOnce(event.user, askerName);
+    const { connections } = this.deps;
+    void connections?.refresh().catch(() => undefined); // picks up logins made outside Ghost, at most every 5 minutes
 
     // Do not show the mention itself as context. The question section already holds it.
     const threadContext = thread.filter((m) => m.ts !== event.ts);
@@ -144,6 +148,7 @@ export class Ghost {
       aboutAsker: event.user ? this.deps.profiles.read(event.user) : undefined,
       timezone,
       schedules: event.user && this.deps.scheduler ? this.deps.scheduler.list(event.user).map(describeSchedule) : undefined,
+      connections: connections ? { connected: connections.servers.map((s) => s.name), needsLogin: connections.needsLogin } : undefined,
     });
     log.debug("prompt built", { chars: built.prompt.length, sources: built.sources.length, retrieved: retrieved.length });
 
@@ -169,6 +174,9 @@ export class Ghost {
           if (!scheduler) throw new Error("scheduling is off");
           const created = await scheduler.create(d.spec, { userId: who.userId, channelId: who.channelId, tz: who.tz });
           log.info("schedule created", { id: created.id, kind: created.kind, nextRun: new Date(created.nextRun).toISOString(), cron: created.cron });
+        } else if (d.type === "connect") {
+          if (!this.deps.connections) throw new Error("connections are off");
+          void this.connect(d.name, who.channelId);
         } else if (d.type === "cancel") {
           if (!(await scheduler?.cancel(who.userId, d.id))) notes.push(`⚠️ I couldn't find schedule #${d.id}.`);
         } else {
@@ -181,6 +189,20 @@ export class Ghost {
       }
     }
     return notes;
+  }
+
+  /** Run the sign-in for a connection, then report the result in the channel. */
+  private async connect(name: string, channelId: string): Promise<void> {
+    let message: string;
+    try {
+      log.info("connection login started", { name });
+      const ok = await this.deps.connections!.login(name);
+      message = ok ? `✅ ${name} is connected. Ask me again and I'll use it.` : `⚠️ The ${name} login didn't finish. Say "connect ${name}" to try again.`;
+    } catch (error) {
+      message = `⚠️ I couldn't start the ${name} login: ${error instanceof Error ? error.message : String(error)}.`;
+    }
+    log.info("connection login finished", { name, message });
+    await this.deps.api.post(channelId, undefined, message).catch((error) => log.warn("connect post failed", errorFields(error)));
   }
 
   /** Draft a profile from the user's own indexed messages, once, in the background. */

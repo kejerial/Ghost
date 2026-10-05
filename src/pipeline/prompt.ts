@@ -24,6 +24,8 @@ Use the web:
 Connections:
 - You may have tools for connected services (GitHub, Linear, Apollo, and others). Use them whenever they help answer.
 - Read freely. Create, change, send, or delete something only when the asker explicitly asks for that in their current message.
+- <connections> lists what is connected and what needs a login. If the request needs a service that needs a login, or a connection fails with an auth error (401, expired, unauthorized), say so in one line and ask: "Want me to open the <name> login on your Mac?"
+- When the asker says yes, add <<connect: NAME>> with the exact name from <connections>. Ghost opens the sign-in page in their browser and reports back when it is done.
 
 Memory:
 - <about_asker> is what you know about the person asking: their profile and saved memories. Use it to tailor every answer.
@@ -69,6 +71,8 @@ export interface PromptInput {
   timezone?: string;
   /** One line per active schedule of the asker. */
   schedules?: string[];
+  /** Connection names: live ones and ones that need a login. */
+  connections?: { connected: string[]; needsLogin: string[] };
 }
 
 export interface BuiltPrompt {
@@ -139,6 +143,12 @@ export function buildPrompt(input: PromptInput): BuiltPrompt {
   );
   if (input.aboutAsker) sections.push(`<about_asker>\n${input.aboutAsker}\n</about_asker>`);
   if (input.timezone) sections.push(`<asker_time timezone="${input.timezone}">${localTime(now, input.timezone)}</asker_time>`);
+  if (input.connections) {
+    const { connected, needsLogin } = input.connections;
+    sections.push(
+      `<connections>\nConnected: ${connected.join(", ") || "(none)"}\nNeeds login: ${needsLogin.join(", ") || "(none)"}\n</connections>`,
+    );
+  }
   if (input.schedules) {
     sections.push(`<asker_schedules>\n${input.schedules.length ? input.schedules.join("\n") : "(none)"}\n</asker_schedules>`);
   }

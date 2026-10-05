@@ -9,7 +9,7 @@ export type { ModelBackend } from "./types.js";
 
 export function createBackend(
   config: Pick<Config, "backend" | "model" | "proxyUrl" | "proxyApiKey">,
-  mcpServers: McpServer[] = [],
+  mcpServers: () => McpServer[] = () => [],
 ): ModelBackend {
   switch (config.backend) {
     case "claude":

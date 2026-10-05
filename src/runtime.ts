@@ -2,7 +2,7 @@ import { webApi } from "@slack/bolt";
 import { dirname, join } from "node:path";
 import { createBackend } from "./backend/index.js";
 import type { Config } from "./config.js";
-import { loadMcpServers } from "./integrations/mcp.js";
+import { Connections } from "./integrations/mcp.js";
 import { Profiles } from "./memory/profiles.js";
 import { Ghost } from "./pipeline/ghost.js";
 import { FtsRetriever } from "./retrieval/search.js";
@@ -34,18 +34,20 @@ export async function createRuntime(
   const store = new Store(openDb(config.dbPath));
   const users = new UserDirectory(api, store);
   const syncer = new Syncer(api, store, users, identity, { backfillDays: config.backfillDays });
-  const mcpServers = await loadMcpServers({ mode: config.connections, exclude: config.connectionsExclude });
+  const connections = new Connections({ mode: config.connections, exclude: config.connectionsExclude });
+  await connections.refresh(true);
   const ghost = new Ghost({
     api,
     store,
     users,
     retriever: new FtsRetriever(store),
-    backend: createBackend(config, mcpServers),
+    backend: createBackend(config, () => connections.servers),
     limiter: new Limiter(config.maxConcurrency),
     identity,
     contextChars: config.contextChars,
     modelTimeoutMs: config.modelTimeoutMs,
     profiles: new Profiles(join(dirname(config.dbPath), "profiles")),
+    connections,
   });
   const scheduler = new Scheduler(store.db, api, async (s) => {
     const ts = (Date.now() / 1000).toFixed(6);
