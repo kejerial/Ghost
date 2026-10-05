@@ -4,3 +4,5 @@ data/
 *.log
 .slack/apps.dev.json
 .slack/cache/
+.slack/apps.json
+.slack/config.json

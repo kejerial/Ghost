@@ -40,6 +40,10 @@ scripts/service.sh install
 ```
 8. In Slack, type `/invite @Ghost` in each channel that Ghost should read.
 
+## Before you share a workspace with Ghost
+
+Anyone in the workspace can tag `@Ghost`. Ghost then answers with your subscription, and it can quote any channel that Ghost is in, including private ones. Invite Ghost only to channels whose content you are comfortable with it repeating.
+
 ## Commands
 
 | Command | Purpose |

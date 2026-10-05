@@ -35,7 +35,7 @@ export interface Config {
   backfillDays: number;
   resyncMinutes: number;
   contextChars: number;
-  /** Kevin's personal channel (name or ID). Ghost answers every message there, no tag needed. */
+  /** Optional chat channel (name or ID). Ghost answers every message there, no tag needed. */
   homeChannel: string | undefined;
   logLevel: "debug" | "info" | "warn" | "error";
 }
