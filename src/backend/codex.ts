@@ -135,12 +135,15 @@ export function progressReader(onProgress: (step: ProgressStep) => void): (chunk
     for (const line of lines) {
       if (!line.startsWith("{")) continue;
       try {
-        const event = JSON.parse(line) as { type?: string; item?: { type?: string; server?: string; server_name?: string } };
+        const event = JSON.parse(line) as { type?: string; item?: { type?: string; server?: string; server_name?: string; tool?: string; tool_name?: string } };
         if ((event.type !== "item.started" && event.type !== "item.completed") || !event.item) continue;
         const phase = event.type === "item.started" ? "started" : "done";
         if (event.item.type === "web_search") onProgress({ kind: "web", phase });
         const server = event.item.server ?? event.item.server_name;
-        if (event.item.type?.includes("mcp") && server) onProgress({ kind: "connection", name: server, phase });
+        // ChatGPT apps all arrive under one server; the tool name ("google_calendar.read_event") names the app.
+        const tool = event.item.tool ?? event.item.tool_name;
+        const name = server === "codex_apps" && tool?.includes(".") ? tool.split(".")[0] : server;
+        if (event.item.type?.includes("mcp") && name) onProgress({ kind: "connection", name, phase });
       } catch {
         // not an event line
       }

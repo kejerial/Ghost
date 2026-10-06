@@ -115,7 +115,7 @@ describe("ChatGPT apps", () => {
       ],
     });
     const withCal = backend.args("/tmp/o", { system: "", prompt: "", timeoutMs: 1, connections: ["google-calendar"] }).join(" ");
-    expect(withCal).toContain("--enable apps --enable plugins -c apps._default.enabled=false -c apps.connector_cal1.enabled=true");
+    expect(withCal).toContain("--enable apps --enable plugins -c apps._default.enabled=false -c apps.connector_cal1.enabled=true -c apps.connector_cal1.default_tools_approval_mode=\"approve\"");
     expect(withCal).not.toContain("connector_gmail1");
     expect(withCal).not.toContain("--disable apps");
 

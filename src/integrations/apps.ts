@@ -87,7 +87,10 @@ export async function loadApps(pluginListText: string, exclude: string[], codexH
 export function codexAppArgs(apps: AppConnection[]): string[] {
   if (!apps.length) return [];
   const args = ["--enable", "apps", "--enable", "plugins", "-c", "apps._default.enabled=false"];
-  for (const app of apps) args.push("-c", `apps.${app.appId}.enabled=true`);
+  // Ghost runs headless, so nobody can answer an approval prompt. The system prompt limits writes to explicit asks.
+  for (const app of apps) {
+    args.push("-c", `apps.${app.appId}.enabled=true`, "-c", `apps.${app.appId}.default_tools_approval_mode="approve"`);
+  }
   return args;
 }
 

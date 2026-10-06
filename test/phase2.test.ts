@@ -331,6 +331,13 @@ describe("speed: connection routing and progress", () => {
     ]);
   });
 
+  it("names a ChatGPT app by its tool, never as the codex_apps server", () => {
+    const steps: unknown[] = [];
+    progressReader((s) => steps.push(s))('{"type":"item.started","item":{"type":"mcp_tool_call","server":"codex_apps","tool":"google_calendar.read_event"}}\n');
+    expect(steps).toEqual([{ kind: "connection", name: "google_calendar", phase: "started" }]);
+    expect(displayName("google_calendar")).toBe("Google Calendar");
+  });
+
   it("streams JSON and starts only the requested connections", () => {
     const backend = new CodexCliBackend({
       mcpServers: () => [
