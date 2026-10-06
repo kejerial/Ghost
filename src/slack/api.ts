@@ -1,4 +1,5 @@
 import type { webApi } from "@slack/bolt";
+import type { SlackFile } from "./files.js";
 
 type WebClient = webApi.WebClient;
 
@@ -13,6 +14,9 @@ export interface SlackMessage {
   subtype?: string;
   reply_count?: number;
   latest_reply?: string;
+  files?: SlackFile[];
+  /** Rich layout blocks. Ghost reads only table blocks from them. */
+  blocks?: unknown[];
 }
 
 export interface ChannelInfo {

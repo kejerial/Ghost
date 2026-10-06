@@ -8,6 +8,7 @@ import { Ghost } from "./pipeline/ghost.js";
 import { FtsRetriever } from "./retrieval/search.js";
 import { Scheduler } from "./schedule/scheduler.js";
 import { slackApiFrom, type SlackApi } from "./slack/api.js";
+import { FileReader } from "./slack/files.js";
 import { UserDirectory } from "./slack/users.js";
 import { openDb, Store } from "./store/db.js";
 import { Syncer } from "./store/sync.js";
@@ -36,6 +37,8 @@ export async function createRuntime(
   const syncer = new Syncer(api, store, users, identity, { backfillDays: config.backfillDays });
   const connections = new Connections({ mode: config.connections, exclude: config.connectionsExclude });
   await connections.refresh(true);
+  const files = new FileReader(config.slackBotToken, join(dirname(config.dbPath), "files"));
+  void files.prune();
   const ghost = new Ghost({
     api,
     store,
@@ -48,6 +51,7 @@ export async function createRuntime(
     modelTimeoutMs: config.modelTimeoutMs,
     profiles: new Profiles(join(dirname(config.dbPath), "profiles")),
     connections,
+    files,
   });
   const scheduler = new Scheduler(store.db, api, async (s) => {
     const ts = (Date.now() / 1000).toFixed(6);

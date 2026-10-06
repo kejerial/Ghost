@@ -65,6 +65,7 @@ export class CodexCliBackend implements ModelBackend {
       "-C", modelSandboxDir(),
       "-o", outputFile,
     ];
+    for (const image of request?.images ?? []) args.push("--image", image);
     for (const feature of DISABLED_FEATURES) args.push("--disable", feature);
     args.push(...codexMcpArgs(this.servers(request)));
     if (this.options.model) args.push("-m", this.options.model);

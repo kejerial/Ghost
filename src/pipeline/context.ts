@@ -1,5 +1,6 @@
 import type { SlackApi, SlackMessage } from "../slack/api.js";
 import { cleanSlackText } from "../slack/text.js";
+import { tableBlocksText, type SlackFile } from "../slack/files.js";
 import type { UserDirectory } from "../slack/users.js";
 
 export interface ContextMessage {
@@ -10,6 +11,8 @@ export interface ContextMessage {
   text: string;
   /** Ghost's own earlier replies. They give conversational context but are never cited as sources. */
   isGhost: boolean;
+  /** Files attached to the message. */
+  files?: SlackFile[];
 }
 
 const SKIP_SUBTYPES = new Set(["channel_join", "channel_leave", "channel_topic", "channel_purpose", "channel_name", "bot_add", "bot_remove"]);
@@ -24,8 +27,10 @@ async function toContext(
   const out: ContextMessage[] = [];
   for (const m of messages) {
     if (m.subtype && SKIP_SUBTYPES.has(m.subtype)) continue;
-    const text = cleanSlackText(m.text ?? "", (id) => users.cached(id));
-    if (!text) continue;
+    const table = tableBlocksText(m.blocks);
+    const text = [cleanSlackText(m.text ?? "", (id) => users.cached(id)), table && `(table)\n${table}`].filter(Boolean).join("\n");
+    const files = m.files?.filter((f) => f.id);
+    if (!text && !files?.length) continue;
     const ghost = isGhost(m);
     out.push({
       channelId,
@@ -34,6 +39,7 @@ async function toContext(
       userName: ghost ? "Ghost" : m.user ? await users.name(m.user) : (m.username ?? "bot"),
       text,
       isGhost: ghost,
+      ...(files?.length ? { files } : {}),
     });
   }
   return out;

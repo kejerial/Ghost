@@ -8,6 +8,8 @@ export interface CompletionRequest {
   connections?: string[];
   /** Called as the model works: each web search or connection tool call. */
   onProgress?: (step: ProgressStep) => void;
+  /** Local image files to show the model (JPEG). Backends without image input ignore them. */
+  images?: string[];
 }
 
 export type ProgressStep = ({ kind: "web" } | { kind: "connection"; name: string }) & {

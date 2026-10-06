@@ -5,6 +5,7 @@
     "background_color": "#1f2328"
   },
   "features": {
+    "app_home": {},
     "bot_user": {
       "display_name": "Ghost",
       "always_online": false
@@ -15,6 +16,7 @@
       "bot": [
         "app_mentions:read",
         "chat:write",
+        "files:read",
         "reactions:write",
         "channels:history",
         "channels:read",
@@ -25,6 +27,11 @@
     }
   },
   "settings": {
+    "socket_mode_enabled": true,
+    "org_deploy_enabled": false,
+    "interactivity": {
+      "is_enabled": false
+    },
     "event_subscriptions": {
       "bot_events": [
         "app_mention",
@@ -37,9 +44,6 @@
         "group_archive"
       ]
     },
-    "interactivity": { "is_enabled": false },
-    "org_deploy_enabled": false,
-    "socket_mode_enabled": true,
     "token_rotation_enabled": false
   }
 }

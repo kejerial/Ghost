@@ -14,12 +14,21 @@ import type { ProgressStep } from "../backend/types.js";
 import { PROFILE_PROMPT, type Profiles } from "../memory/profiles.js";
 import { describe as describeSchedule, type Scheduler } from "../schedule/scheduler.js";
 import { extractDirectives, type Directive } from "./directives.js";
-import { buildPrompt } from "./prompt.js";
+import { buildPrompt, type PromptAttachment } from "./prompt.js";
+import type { Attachment, FileReader, SlackFile } from "../slack/files.js";
+
+/** At most this many files per answer, newest first, and at most this many of them as images. */
+const MAX_FILES = 6;
+const MAX_IMAGES = 4;
+/** Total extracted-text budget across all attachments. */
+const MAX_ATTACHMENT_CHARS = 40000;
+const FILE_ONLY_QUESTION = "(No message text. Look at the attached file(s) and respond helpfully: say what it is and what stands out.)";
 
 export interface MentionEvent {
   channel: string;
   ts: string;
   thread_ts?: string;
+  files?: SlackFile[];
   user?: string;
   text: string;
 }
@@ -36,6 +45,8 @@ export interface GhostDeps {
   modelTimeoutMs: number;
   profiles: Profiles;
   connections?: Connections;
+  /** Reads attachments. Without it, Ghost sees only file names. */
+  files?: FileReader;
   /** Set after construction, because the scheduler runs tasks through this Ghost. */
   scheduler?: Scheduler;
 }
@@ -101,9 +112,9 @@ export class Ghost {
     }
     const replyThreadTs = placement === "channel" ? event.thread_ts : (event.thread_ts ?? event.ts);
 
-    const question = stripMention(event.text, this.deps.identity.botUserId);
+    const question = stripMention(event.text, this.deps.identity.botUserId) || (event.files?.length ? FILE_ONLY_QUESTION : "");
     if (!question) {
-      if (placement === "channel") return; // a file or an empty message in the home channel
+      if (placement === "channel") return; // an empty message in the home channel
       await api.post(event.channel, replyThreadTs, HELP_TEXT).catch((error) => log.warn("help post failed", errorFields(error)));
       return;
     }
@@ -170,6 +181,8 @@ export class Ghost {
     exclude.add(`${event.channel}:${event.ts}`);
 
     const retrieved = retriever.search({ question, channelId: event.channel, exclude });
+    const currentFiles = event.files ?? thread.find((m) => m.ts === event.ts)?.files ?? [];
+    const { attachments, images } = await this.readAttachments(currentFiles, askerName, [...threadContext, ...recent]);
     const built = buildPrompt({
       question,
       askerName,
@@ -184,6 +197,7 @@ export class Ghost {
       timezone,
       schedules: event.user && this.deps.scheduler ? this.deps.scheduler.list(event.user).map(describeSchedule) : undefined,
       connections: connections ? { connected: connections.servers.map((s) => s.name), needsLogin: connections.needsLogin } : undefined,
+      attachments,
     });
     log.debug("prompt built", { chars: built.prompt.length, sources: built.sources.length, retrieved: retrieved.length });
 
@@ -200,6 +214,7 @@ export class Ghost {
         timeoutMs: this.deps.modelTimeoutMs,
         connections: attach,
         onProgress: options.onProgress,
+        images,
       }),
     );
     const { text, directives } = extractDirectives(raw);
@@ -210,6 +225,52 @@ export class Ghost {
     const rendered = renderAnswer(text, built.sources);
     const footer = notes.length ? `\n\n${notes.map((n) => `_${n}_`).join("\n")}` : "";
     return { text: rendered.text + footer, sourceCount: built.sources.length, citedCount: rendered.cited, logins };
+  }
+
+  /**
+   * Read the files on the question first, then the newest files in the conversation.
+   * Images go to the model as images; everything else as extracted text.
+   */
+  private async readAttachments(
+    current: SlackFile[],
+    askerName: string,
+    conversation: ContextMessage[],
+  ): Promise<{ attachments: PromptAttachment[]; images: string[] }> {
+    const candidates: { file: SlackFile; from: string; current: boolean }[] = current.map((file) => ({ file, from: askerName, current: true }));
+    for (const m of [...conversation].sort((a, b) => Number(b.ts) - Number(a.ts))) {
+      if (m.isGhost) continue;
+      for (const file of m.files ?? []) candidates.push({ file, from: m.userName, current: false });
+    }
+    const seen = new Set<string>();
+    const chosen = candidates.filter((c) => !seen.has(c.file.id) && seen.add(c.file.id)).slice(0, MAX_FILES);
+    if (!chosen.length) return { attachments: [], images: [] };
+    const reader = this.deps.files;
+    const read: Attachment[] = await Promise.all(
+      chosen.map((c) => (reader ? reader.read(c.file) : Promise.resolve({ id: c.file.id, name: c.file.name ?? c.file.id, note: "file reading is off" }))),
+    );
+
+    const attachments: PromptAttachment[] = [];
+    const images: string[] = [];
+    let chars = 0;
+    read.forEach((a, i) => {
+      const out: PromptAttachment = { name: a.name, from: chosen[i]!.from, current: chosen[i]!.current, note: a.note };
+      if (a.imagePath) {
+        if (images.length < MAX_IMAGES) out.imageNumber = images.push(a.imagePath);
+        else out.note = "image not shown: too many images in this conversation";
+      }
+      if (a.text) {
+        const room = MAX_ATTACHMENT_CHARS - chars;
+        if (room <= 200) out.note = "text not included: the attachments are too long in total";
+        else {
+          const text = a.text.length <= room ? a.text : `${a.text.slice(0, room)}\n…(truncated)`;
+          out.text = text;
+          chars += text.length;
+        }
+      }
+      attachments.push(out);
+    });
+    log.info("attachments read", { files: attachments.length, images: images.length, chars, notes: attachments.filter((a) => a.note).map((a) => a.note) });
+    return { attachments, images };
   }
 
   /** Apply the model's directives for this user. Returns notes for anything that failed. */

@@ -10,6 +10,7 @@ import { openDb, Store } from "./store/db.js";
 export const REQUIRED_SCOPES = [
   "app_mentions:read",
   "chat:write",
+  "files:read",
   "channels:history",
   "channels:read",
   "groups:history",

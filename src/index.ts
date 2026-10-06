@@ -4,6 +4,7 @@ import { errorFields, log, setLogLevel } from "./log.js";
 import { ChatChannels } from "./pipeline/chat-channels.js";
 import { createRuntime } from "./runtime.js";
 import type { MessageEvent } from "./store/sync.js";
+import type { SlackFile } from "./slack/files.js";
 
 const config = loadConfig();
 setLogLevel(config.logLevel);
@@ -32,7 +33,7 @@ const chat = new ChatChannels(api, users, identity.botUserId, homeChannelId);
 // The message handler can see the same message; event dedupe in Ghost answers it once.
 app.event("app_mention", async ({ event }) => {
   const placement = (await chat.isChat(event.channel, event.user)) ? "channel" : "thread";
-  void ghost.handleMention({ channel: event.channel, ts: event.ts, thread_ts: event.thread_ts, user: event.user, text: event.text }, placement);
+  void ghost.handleMention({ channel: event.channel, ts: event.ts, thread_ts: event.thread_ts, user: event.user, text: event.text, files: (event as { files?: SlackFile[] }).files }, placement);
 });
 
 // Keep the index current from live message events (message.channels, message.groups).
@@ -42,7 +43,7 @@ app.event("message", async ({ event }) => {
   const human = message.user && !message.bot_id && (!message.subtype || message.subtype === "file_share" || message.subtype === "thread_broadcast");
   if (!human || !(await chat.isChat(message.channel, message.user))) return;
   void ghost.handleMention(
-    { channel: message.channel, ts: message.ts, thread_ts: message.thread_ts, user: message.user, text: message.text ?? "" },
+    { channel: message.channel, ts: message.ts, thread_ts: message.thread_ts, user: message.user, text: message.text ?? "", files: message.files },
     "channel",
   );
 });
