@@ -174,13 +174,14 @@ export class Connections {
   }
 }
 
+const BRANDS: Record<string, string> = { github: "GitHub", gitlab: "GitLab", hubspot: "HubSpot", youtube: "YouTube" };
+
 /** A readable name for a connection: "figma-remote-mcp" → "Figma", "linear" → "Linear". */
 export function displayName(name: string): string {
   const words = name
     .split(/[-_]/)
     .filter((w) => w && !["mcp", "remote", "server"].includes(w.toLowerCase()));
-  const pretty = (words.length ? words : [name]).map((w) => w[0]!.toUpperCase() + w.slice(1)).join(" ");
-  return pretty;
+  return (words.length ? words : [name]).map((w) => BRANDS[w.toLowerCase()] ?? w[0]!.toUpperCase() + w.slice(1)).join(" ");
 }
 
 /** Env values that every model call needs for its connections. */

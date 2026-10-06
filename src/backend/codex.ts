@@ -121,10 +121,11 @@ export function progressReader(onProgress: (step: ProgressStep) => void): (chunk
       if (!line.startsWith("{")) continue;
       try {
         const event = JSON.parse(line) as { type?: string; item?: { type?: string; server?: string; server_name?: string } };
-        if (event.type !== "item.started" || !event.item) continue;
-        if (event.item.type === "web_search") onProgress({ kind: "web" });
+        if ((event.type !== "item.started" && event.type !== "item.completed") || !event.item) continue;
+        const phase = event.type === "item.started" ? "started" : "done";
+        if (event.item.type === "web_search") onProgress({ kind: "web", phase });
         const server = event.item.server ?? event.item.server_name;
-        if (event.item.type?.includes("mcp") && server) onProgress({ kind: "connection", name: server });
+        if (event.item.type?.includes("mcp") && server) onProgress({ kind: "connection", name: server, phase });
       } catch {
         // not an event line
       }

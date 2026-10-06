@@ -10,7 +10,10 @@ export interface CompletionRequest {
   onProgress?: (step: ProgressStep) => void;
 }
 
-export type ProgressStep = { kind: "web" } | { kind: "connection"; name: string };
+export type ProgressStep = ({ kind: "web" } | { kind: "connection"; name: string }) & {
+  /** "done" when the step finished. Steps can overlap: Codex may run several tool calls at once. */
+  phase?: "started" | "done";
+};
 
 /**
  * One model call. Implementations: the `claude` CLI, the `codex` CLI, and an

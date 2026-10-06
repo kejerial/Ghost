@@ -322,8 +322,13 @@ describe("speed: connection routing and progress", () => {
     const read = progressReader((s) => steps.push(s));
     read('{"type":"item.started","item":{"type":"web_search"}}\n{"type":"item.sta');
     read('rted","item":{"type":"mcp_tool_call","server":"granola","tool":"list_meetings"}}\n');
+    read('{"type":"item.completed","item":{"type":"web_search"}}\n');
     read('{"type":"item.completed","item":{"type":"agent_message","text":"hi"}}\nnot json\n');
-    expect(steps).toEqual([{ kind: "web" }, { kind: "connection", name: "granola" }]);
+    expect(steps).toEqual([
+      { kind: "web", phase: "started" },
+      { kind: "connection", name: "granola", phase: "started" },
+      { kind: "web", phase: "done" },
+    ]);
   });
 
   it("streams JSON and starts only the requested connections", () => {

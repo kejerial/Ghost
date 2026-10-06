@@ -327,19 +327,28 @@ export class Ghost {
 }
 
 /**
- * One live status line while Ghost works ("🔎 Searching the web…"). It appears on the first
- * step, changes as the model moves between steps, and is deleted once the answer is posted.
+ * A live status message while Ghost works. It lists every step (web search, each connection),
+ * marks finished steps with ✓, and is deleted once the answer is posted.
  */
 function statusLine(api: SlackApi, channel: string, threadTs: string | undefined) {
   let ts: string | undefined;
   let last = "";
   let closed = false;
   let chain: Promise<void> = Promise.resolve();
-  const label = (step: ProgressStep) => (step.kind === "web" ? "🔎 Searching the web…" : `📎 Checking ${displayName(step.name)}…`);
+  /** Steps in first-seen order, with how many calls of each are still running. */
+  const steps = new Map<string, { label: string; running: number }>();
+  const render = () =>
+    [...steps.values()].map((s) => `• ${s.label}${s.running > 0 ? "…" : " ✓"}`).join("\n");
   return {
     show: (step: ProgressStep) => {
-      const text = label(step);
-      if (closed || text === last) return;
+      if (closed) return;
+      const key = step.kind === "web" ? "web" : `connection:${step.name}`;
+      const label = step.kind === "web" ? "🔎 Searching the web" : `📎 Checking ${displayName(step.name)}`;
+      const entry = steps.get(key) ?? { label, running: 0 };
+      entry.running = Math.max(0, entry.running + (step.phase === "done" ? -1 : 1));
+      steps.set(key, entry);
+      const text = render();
+      if (text === last) return;
       last = text;
       chain = chain
         .then(async () => {

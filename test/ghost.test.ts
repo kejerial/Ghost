@@ -218,15 +218,22 @@ describe("Ghost.handleMention", () => {
 
   it("shows a live status line while working and deletes it after the answer", async () => {
     const backend = new FakeBackend((request) => {
-      request.onProgress?.({ kind: "web" });
-      request.onProgress?.({ kind: "web" }); // same step: no extra update
-      request.onProgress?.({ kind: "connection", name: "granola" });
+      request.onProgress?.({ kind: "web", phase: "started" });
+      request.onProgress?.({ kind: "connection", name: "granola", phase: "started" });
+      request.onProgress?.({ kind: "connection", name: "github", phase: "started" }); // runs alongside Granola
+      request.onProgress?.({ kind: "web", phase: "done" });
+      request.onProgress?.({ kind: "connection", name: "github", phase: "done" });
       return "Done.";
     });
     const { slack, ghost } = await workspace(backend);
     await ghost.handleMention({ channel: "CGEN", ts: tsDaysAgo(0), user: "UK", text: "what happened in my last meeting?" }, "channel");
-    expect(slack.posts.map((p) => p.text)).toEqual(["🔎 Searching the web…", "Done."]);
-    expect(slack.updates.map((u) => u.text)).toEqual(["📎 Checking Granola…"]);
+    expect(slack.posts.map((p) => p.text)).toEqual(["• 🔎 Searching the web…", "Done."]);
+    expect(slack.updates.map((u) => u.text)).toEqual([
+      "• 🔎 Searching the web…\n• 📎 Checking Granola…",
+      "• 🔎 Searching the web…\n• 📎 Checking Granola…\n• 📎 Checking GitHub…",
+      "• 🔎 Searching the web ✓\n• 📎 Checking Granola…\n• 📎 Checking GitHub…",
+      "• 🔎 Searching the web ✓\n• 📎 Checking Granola…\n• 📎 Checking GitHub ✓",
+    ]);
     expect(slack.deleted).toEqual([slack.posts[0]!.ts]);
   });
 
