@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import ExcelJS from "exceljs";
 import { FileReader, tableBlocksText, type SlackFile } from "../src/slack/files.js";
@@ -99,6 +99,13 @@ describe("FileReader", () => {
     const scan = await reader.read(file("FSCAN", "pdf"));
     expect(scan.imagePath).toMatch(/image\.jpg$/);
     expect(scan.note).toBeUndefined();
+  });
+
+  it("returns an absolute image path, because the model runs in another folder", async () => {
+    const dir = relative(process.cwd(), mkdtempSync(join(tmpdir(), "ghost-files-")));
+    const reader = new FileReader("xoxb-test", dir, fakeFetch({ "https://files.slack.com/FSCAN": { body: pdf(), type: "application/pdf" } }));
+    const scan = await reader.read(file("FSCAN", "pdf"));
+    expect(isAbsolute(scan.imagePath!)).toBe(true);
   });
 
   it("caches by file ID, so a follow-up question does not download again", async () => {

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { log, errorFields } from "../log.js";
 
@@ -59,11 +59,16 @@ const clip = (text: string) => {
  * Results are cached per file ID under `dir`, so follow-up questions do not download again.
  */
 export class FileReader {
+  private readonly dir: string;
+
   constructor(
     private readonly token: string,
-    private readonly dir: string,
+    dir: string,
     private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+  ) {
+    // Absolute, because the model runs in another folder and gets image paths as arguments.
+    this.dir = resolve(dir);
+  }
 
   async read(file: SlackFile): Promise<Attachment> {
     const name = file.name || file.title || file.id;
