@@ -196,7 +196,9 @@ export class Ghost {
       aboutAsker: event.user ? this.deps.profiles.read(event.user) : undefined,
       timezone,
       schedules: event.user && this.deps.scheduler ? this.deps.scheduler.list(event.user).map(describeSchedule) : undefined,
-      connections: connections ? { connected: connections.servers.map((s) => s.name), needsLogin: connections.needsLogin } : undefined,
+      connections: connections
+        ? { connected: connections.connected, needsLogin: connections.needsLogin, available: connections.availableApps }
+        : undefined,
       attachments,
     });
     log.debug("prompt built", { chars: built.prompt.length, sources: built.sources.length, retrieved: retrieved.length });
@@ -204,7 +206,7 @@ export class Ghost {
     // Attach only the connections this conversation needs; each one adds start-up time to the call.
     const routingText = [question, ...[...threadContext, ...recent].slice(-6).map((m) => m.text)].join("\n");
     const attach = connections
-      ? [...new Set([...pickConnections(connections.servers.map((s) => s.name), routingText), ...(options.forceConnections ?? [])])]
+      ? [...new Set([...pickConnections(connections.connected, routingText), ...(options.forceConnections ?? [])])]
       : undefined;
     log.debug("connections attached", { attach });
     const raw = await limiter.run(() =>

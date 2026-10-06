@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BackendError, type CompletionRequest, type ModelBackend, type ProgressStep } from "./types.js";
 import { codexMcpArgs, mcpEnv, type McpServer } from "../integrations/mcp.js";
+import { codexAppArgs, type AppConnection } from "../integrations/apps.js";
 import { childEnv, modelSandboxDir, runProcess, tail, type Runner } from "./subprocess.js";
 
 /**
@@ -40,12 +41,19 @@ export class CodexCliBackend implements ModelBackend {
       reasoningEffort?: string;
       /** The current connections; read on every call so new logins apply at once. */
       mcpServers?: () => McpServer[];
+      /** Installed ChatGPT apps (Gmail, Google Calendar, …); read on every call. */
+      apps?: () => AppConnection[];
     } = {},
   ) {}
 
   private servers(request?: CompletionRequest): McpServer[] {
     const all = this.options.mcpServers?.() ?? [];
     return request?.connections ? all.filter((s) => request.connections!.includes(s.name)) : all;
+  }
+
+  private apps(request?: CompletionRequest): AppConnection[] {
+    const all = this.options.apps?.() ?? [];
+    return request?.connections ? all.filter((a) => request.connections!.includes(a.name)) : all;
   }
 
   args(outputFile: string, request?: CompletionRequest): string[] {
@@ -66,8 +74,14 @@ export class CodexCliBackend implements ModelBackend {
       "-o", outputFile,
     ];
     for (const image of request?.images ?? []) args.push("--image", image);
-    for (const feature of DISABLED_FEATURES) args.push("--disable", feature);
+    // Apps stay off unless this question needs one. Then only that app is on (see codexAppArgs).
+    const apps = this.apps(request);
+    for (const feature of DISABLED_FEATURES) {
+      if (apps.length && (feature === "apps" || feature === "plugins")) continue;
+      args.push("--disable", feature);
+    }
     args.push(...codexMcpArgs(this.servers(request)));
+    args.push(...codexAppArgs(apps));
     if (this.options.model) args.push("-m", this.options.model);
     args.push("-"); // Read the prompt from stdin.
     return args;

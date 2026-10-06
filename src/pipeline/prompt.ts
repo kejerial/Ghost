@@ -25,7 +25,12 @@ Use the web:
 Connections:
 - You may have tools for connected services (GitHub, Linear, Apollo, and others). Use them whenever they help answer.
 - Read freely. Create, change, send, or delete something only when the asker explicitly asks for that in their current message.
-- <connections> lists what is connected and what needs a login. If the request needs a service that needs a login, or a connection fails with an auth error (401, expired, unauthorized), do not ask first: add <<connect: NAME>> with the exact name from <connections>, and say in one line that you are opening the <name> sign-in. Ghost opens it, posts the sign-in link, and answers the question again after the login.
+- <connections> lists three groups: Connected (usable now), Needs login (set up, but signed out), and Available to connect (services Ghost can add on request).
+- Gmail and Google Calendar style apps work like any connection: read the inbox, search email, check events and free time. Draft or send email and create or change events only when the asker explicitly asks for that.
+- Needs login: if the request needs one, or a connection fails with an auth error (401, expired, unauthorized), do not ask first: add <<connect: NAME>> with the exact name from <connections>, and say in one line that you are opening the sign-in. Ghost opens it, posts the sign-in link, and answers the question again after the login.
+- Available to connect: if the request would go better with one of them (for example Google Drive for "find the pitch deck", Outlook for a work inbox), answer what you can now, then offer it in one line that names exactly what you could do with it: "I can search your Drive for this if you connect Google Drive. Want me to?" Offer only services that clearly fit the request. Do not list the catalog. In prose, write the product name ("Google Drive"), not the ID ("google-drive"); use the exact ID only inside <<connect: >>.
+- When the asker agrees to connect an available service (for example "yes" after your offer), add <<connect: NAME>>. Ghost installs it, posts the sign-in link, and answers the original question again when it is connected.
+- If a request needs access that is not connected, not needing login, and not available to connect, say plainly that you cannot reach it and what they could paste or share instead.
 
 Memory:
 - <about_asker> is what you know about the person asking: their profile and saved memories. Use it to tailor every answer.
@@ -77,7 +82,7 @@ export interface PromptInput {
   /** One line per active schedule of the asker. */
   schedules?: string[];
   /** Connection names: live ones and ones that need a login. */
-  connections?: { connected: string[]; needsLogin: string[] };
+  connections?: { connected: string[]; needsLogin: string[]; available?: string[] };
   /** Files from the question and the conversation, newest first. */
   attachments?: PromptAttachment[];
 }
@@ -166,9 +171,9 @@ export function buildPrompt(input: PromptInput): BuiltPrompt {
   if (input.aboutAsker) sections.push(`<about_asker>\n${input.aboutAsker}\n</about_asker>`);
   if (input.timezone) sections.push(`<asker_time timezone="${input.timezone}">${localTime(now, input.timezone)}</asker_time>`);
   if (input.connections) {
-    const { connected, needsLogin } = input.connections;
+    const { connected, needsLogin, available = [] } = input.connections;
     sections.push(
-      `<connections>\nConnected: ${connected.join(", ") || "(none)"}\nNeeds login: ${needsLogin.join(", ") || "(none)"}\n</connections>`,
+      `<connections>\nConnected: ${connected.join(", ") || "(none)"}\nNeeds login: ${needsLogin.join(", ") || "(none)"}\nAvailable to connect: ${available.join(", ") || "(none)"}\n</connections>`,
     );
   }
   if (input.schedules) {

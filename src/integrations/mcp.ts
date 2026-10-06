@@ -1,5 +1,6 @@
 import { errorFields, log } from "../log.js";
 import { childEnv, modelSandboxDir, runProcess, type Runner } from "../backend/subprocess.js";
+import { APP_MARKETPLACE, loadApps, serviceKey, type AppConnection } from "./apps.js";
 
 /** One MCP server (a connection such as GitHub, Linear, or Apollo) handed to the model CLI. */
 export interface McpServer {
@@ -90,12 +91,21 @@ const LOGIN_TIMEOUT_MS = 5 * 60_000;
  */
 export class Connections {
   servers: McpServer[] = [];
+  /** ChatGPT apps (Gmail, Google Calendar, …) that are installed and linked. */
+  apps: AppConnection[] = [];
+  /** ChatGPT apps that can be installed on request (`codex plugin add`). */
+  availableApps: string[] = [];
   needsLogin: string[] = [];
   private loginable: string[] = [];
   private loadedAt = 0;
   private loading: Promise<void> | undefined;
 
-  constructor(private readonly options: { mode: "inherit" | "off"; exclude: string[]; run?: Runner }) {}
+  constructor(private readonly options: { mode: "inherit" | "off"; exclude: string[]; run?: Runner; codexHome?: string }) {}
+
+  /** Every connection the model can use now: MCP servers and apps. */
+  get connected(): string[] {
+    return [...this.servers.map((s) => s.name), ...this.apps.map((a) => a.name)];
+  }
 
   /** Reload from the Codex CLI. Without `force`, at most every 5 minutes. */
   refresh(force = false): Promise<void> {
@@ -112,7 +122,8 @@ export class Connections {
    */
   async login(name: string, onUrl?: (url: string) => void, onSignedIn?: () => void): Promise<boolean> {
     await this.refresh();
-    if (!this.loginable.includes(name)) throw new Error(`"${name}" is not a connection that supports login`);
+    const isApp = this.availableApps.includes(name) || this.apps.some((a) => a.name === name);
+    if (!isApp && !this.loginable.includes(name)) throw new Error(`"${name}" is not a connection that supports login`);
     let seen = false;
     const onOutput = (chunk: string) => {
       const url = /https:\/\/[^\s"'<>]+/.exec(chunk)?.[0];
@@ -122,7 +133,9 @@ export class Connections {
       }
     };
     const run = this.options.run ?? runProcess;
-    const result = await run("codex", ["mcp", "login", name], {
+    // An app installs as a Codex plugin; Codex links the account during the install.
+    const args = isApp ? ["plugin", "add", `${name}@${APP_MARKETPLACE}`] : ["mcp", "login", name];
+    const result = await run("codex", args, {
       stdin: "",
       cwd: modelSandboxDir(),
       env: childEnv(),
@@ -131,7 +144,7 @@ export class Connections {
     }).catch(() => undefined);
     if (result?.code === 0) onSignedIn?.(); // before the reload, so the user hears back at once
     await this.refresh(true);
-    return result?.code === 0 && this.servers.some((s) => s.name === name);
+    return result?.code === 0 && this.connected.includes(name);
   }
 
   private exec(command: string, args: string[], timeoutMs = 20_000) {
@@ -165,12 +178,25 @@ export class Connections {
         });
       }
     }
-    const changed = servers.map((s) => s.name).join() !== this.servers.map((s) => s.name).join();
+    // ChatGPT apps. An app for a service that already has a working MCP connection is skipped;
+    // an app for a service whose MCP connection needs a login replaces that login.
+    const plugins = await this.exec("codex", ["plugin", "list"], 30_000);
+    const catalog = plugins?.code === 0 ? await loadApps(plugins.stdout, this.options.exclude, this.options.codexHome) : { installed: [], available: [] };
+    const live = new Set(servers.map((s) => serviceKey(s.name)));
+    const apps = catalog.installed.filter((a) => !live.has(serviceKey(a.name)));
+    const appKeys = new Set(apps.map((a) => serviceKey(a.name)));
+    const needsLogin = status.needsLogin.filter((n) => !appKeys.has(serviceKey(n)));
+    const taken = new Set([...live, ...appKeys, ...needsLogin.map(serviceKey)]);
+
+    const names = [...servers.map((s) => s.name), ...apps.map((a) => a.name)];
+    const changed = names.join() !== this.connected.join();
     this.servers = servers;
+    this.apps = apps;
+    this.availableApps = catalog.available.filter((n) => !taken.has(serviceKey(n)));
     this.loginable = status.loginable;
-    this.needsLogin = status.needsLogin;
+    this.needsLogin = needsLogin;
     this.loadedAt = Date.now();
-    if (changed) log.info("connections loaded", { connections: servers.map((s) => s.name), needsLogin: status.needsLogin });
+    if (changed) log.info("connections loaded", { connections: names, needsLogin, available: this.availableApps.length });
   }
 }
 

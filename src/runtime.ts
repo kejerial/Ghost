@@ -44,7 +44,7 @@ export async function createRuntime(
     store,
     users,
     retriever: new FtsRetriever(store),
-    backend: createBackend(config, () => connections.servers),
+    backend: createBackend(config, () => connections.servers, () => connections.apps),
     limiter: new Limiter(config.maxConcurrency),
     identity,
     contextChars: config.contextChars,

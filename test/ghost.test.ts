@@ -190,6 +190,9 @@ describe("Ghost.handleMention", () => {
     const done = new Promise<void>((resolve) => (loggedIn = resolve));
     (ghost as unknown as { deps: GhostDeps }).deps.connections = {
       servers: [],
+      connected: [],
+      apps: [],
+      availableApps: [],
       needsLogin: ["granola"],
       refresh: async () => undefined,
       login: async (name: string, onUrl?: (url: string) => void, onSignedIn?: () => void) => {

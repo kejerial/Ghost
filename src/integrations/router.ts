@@ -15,6 +15,11 @@ const HINTS: Record<string, string[]> = {
   figma: ["figma", "design", "designs", "mockup", "mockups", "frame", "prototype"],
   context7: ["docs", "documentation", "library", "sdk", "api reference"],
   notion: ["notion", "doc", "docs", "wiki", "page"],
+  gmail: ["gmail", "email", "emails", "inbox", "mail", "unread", "reply", "replied", "sender", "newsletter"],
+  email: ["email", "emails", "inbox", "mail", "unread", "reply", "replied"],
+  calendar: ["calendar", "cal", "schedule", "scheduled", "meeting", "meetings", "event", "events", "free", "busy", "availability", "available", "today", "tomorrow", "week", "agenda", "invite", "reschedule"],
+  drive: ["drive", "doc", "docs", "document", "deck", "slides", "sheet", "spreadsheet", "file", "files", "folder"],
+  contacts: ["contact", "contacts", "phone", "number"],
   slack: [],
 };
 
@@ -31,7 +36,7 @@ export function pickConnections(available: string[], text: string): string[] {
   const lower = ` ${text.toLowerCase()} `;
   const tokens = words(text);
   return available.filter((name) => {
-    const parts = name.toLowerCase().split(/[-_]/).filter((p) => p && !["mcp", "remote", "server"].includes(p));
+    const parts = name.toLowerCase().split(/[-_]/).filter((p) => p && !["mcp", "remote", "server", "google", "outlook"].includes(p));
     if (parts.some((p) => tokens.has(p))) return true; // the connection is named, e.g. "granola"
     const hints = parts.flatMap((p) => HINTS[p] ?? []);
     return hints.some((hint) => (hint.includes(" ") ? lower.includes(` ${hint} `) : tokens.has(hint)));
