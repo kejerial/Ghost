@@ -28,6 +28,11 @@ const NEVER = new Set([
   "task-tool",
   "defense-factory",
   "openai-developers",
+  "openai-templates",
+  "pages",
+  "sites",
+  "plugin-management",
+  "work-pets",
 ]);
 
 export interface AppCatalog {
