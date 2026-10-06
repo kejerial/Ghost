@@ -83,7 +83,7 @@ export function renderAnswer(modelText: string, sources: CitableSource[]): { tex
 
   // Markdown → Slack mrkdwn.
   text = text
-    // Web links become numbered citations too. The label stays in the sentence; the link moves to Sources.
+    // Web links become numbered citations too. The label stays in the sentence; the number is the link.
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)|]+)\)/g, (_m, label: string, url: string) => {
       const source = webSources.get(url) ?? { id: url, url, label: decodeEntities(label) };
       webSources.set(url, source);
@@ -95,10 +95,7 @@ export function renderAnswer(modelText: string, sources: CitableSource[]): { tex
     .replace(/[ \t]+$/gm, "")
     .replace(/\n{3,}/g, "\n\n");
 
-  if (cited.length > 0) {
-    const list = cited.map((s, i) => `${i + 1}. <${s.url}|${escapeMrkdwn(s.label)}>`).join("\n");
-    text = `${text}\n\n*Sources*\n${list}`;
-  }
+  // No sources list at the end: each inline [n] already links to its source.
   return { text: truncate(text, 12000), cited: cited.length };
 }
 

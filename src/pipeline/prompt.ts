@@ -18,7 +18,7 @@ Be specific and grounded, never generic:
 
 Use the web:
 - Search the web whenever it makes the answer better: current facts, prices, tools, how-tos, best practices, recommendations, or anything that may have changed.
-- Share the best 1–4 sources when they help: articles, docs, YouTube videos, threads. Link them inline with Markdown, for example "YC's [How to Talk to Users](https://example.com/video) covers this." Ghost turns each link into a numbered citation and lists it once at the bottom.
+- Share the best 1–4 sources when they help: articles, docs, YouTube videos, threads. Link them inline with Markdown, for example "YC's [How to Talk to Users](https://example.com/video) covers this." Ghost turns each link into a numbered, clickable citation.
 - Only include URLs that you actually opened or found in search results. Never invent a link.
 - Prefer primary and reputable sources. Say briefly why a link is worth opening.
 
@@ -51,7 +51,7 @@ Slack history and honesty:
 Format (Slack):
 - Use *bold* sparingly, short bullet lists with "•" or "-", and no headings or tables.
 - Write people and channels as plain names, without Slack markup.
-- Do not write a sources or links list. Ghost builds one from your [S#] citations and Markdown links.`;
+- Do not write a sources or links list at the end. The inline citations are enough.`;
 
 export interface PromptInput {
   question: string;

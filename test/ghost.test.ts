@@ -72,8 +72,8 @@ describe("Ghost.handleMention", () => {
     const reply = slack.posts[0]!;
     expect(reply).toMatchObject({ channel: "CGEN", threadTs: ts });
     expect(reply.text).toContain(`<${TEAM_URL}archives/CPRICE/p${tsDaysAgo(10).replace(".", "")}|[1]>`);
-    expect(reply.text).toContain("*Sources*\n1. <");
-    expect(reply.text).toMatch(/2\. <[^|]+\|#pricing · Ana · \d{4}-\d{2}-\d{2}>/);
+    expect(reply.text).toContain(`<${TEAM_URL}archives/CPRICE/p${tsDaysAgo(120).replace(".", "")}|[2]>`);
+    expect(reply.text).not.toContain("Sources");
   });
 
   it("includes the current thread when asked inside a thread", async () => {

@@ -4,7 +4,7 @@ A personal Slack assistant that runs on your Mac. It answers with your Slack his
 
 - In a channel where you are the only human member, Ghost answers every message. No tag needed.
 - In other channels, tag `@Ghost`. Ghost replies in the thread.
-- Ghost cites Slack messages and web sources as `[1]`, `[2]` and lists them once at the bottom.
+- Ghost cites Slack messages and web sources inline as clickable `[1]`, `[2]`.
 - **Memory:** each person gets a local profile in `data/profiles/<SLACK_USER_ID>.md`. Ghost drafts it from their messages. Say "remember …" or "forget …" to change it, or edit the file.
 - **Reminders:** "remind me tomorrow at 9 to …" or "every weekday at 8:30 …". Slack's own scheduler posts them, so they arrive on time even when your Mac sleeps.
 - **Scheduled tasks:** "every Monday at 8 summarize #sales". Ghost runs them while your Mac is awake, and runs missed ones on wake.

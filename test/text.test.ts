@@ -41,10 +41,10 @@ describe("renderAnswer", () => {
     expect(cited).toBe(2);
     expect(text).toContain("annual <https://acme.slack.com/archives/C1/p2|[1]>.");
     expect(text).toContain("monthly <https://acme.slack.com/archives/C1/p1|[2]><https://acme.slack.com/archives/C1/p2|[1]>.");
-    expect(text).toContain("*Sources*\n1. <https://acme.slack.com/archives/C1/p2|#pricing · Bo · 2026-09-01>\n2. <");
+    expect(text).not.toContain("Sources");
   });
 
-  it("drops unknown citation IDs and adds no Sources list when nothing is cited", () => {
+  it("drops unknown citation IDs", () => {
     const { text, cited } = renderAnswer("Generally, yes [S9].", sources);
     expect(cited).toBe(0);
     expect(text).toBe("Generally, yes .");
@@ -70,7 +70,7 @@ describe("renderAnswer", () => {
     expect(cited).toBe(3);
     expect(text).toContain("Annual pricing <https://acme.slack.com/archives/C1/p1|[1]>.");
     expect(text).toContain("See YC's guide <https://yc.test/g|[2]> and YC's guide <https://yc.test/g|[2]> and video <https://yt.test/v|[3]>.");
-    expect(text).toContain("*Sources*\n1. <https://acme.slack.com/archives/C1/p1|#pricing · Ana · 2026-03-01>\n2. <https://yc.test/g|YC's guide>\n3. <https://yt.test/v|video>");
+    expect(text).not.toContain("Sources"); // inline citations only, no list at the end
   });
 
   it("does not turn non-http Markdown links into Slack links", () => {

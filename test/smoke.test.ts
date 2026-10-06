@@ -59,7 +59,7 @@ describe.skipIf(!enabled)(`live backend: ${backendName}`, () => {
     const answer = slack.posts[0]!.text;
     report("history", answer);
     expect(answer).toContain("$49");
-    expect(answer).toContain("*Sources*");
+    expect(answer).toMatch(/\|\[1\]>/); // inline citation link
     expect(answer).toContain(`${TEAM_URL}archives/CPRICE/p${tsDaysAgo(10).replace(".", "")}`);
   }, 300_000);
 
@@ -69,6 +69,6 @@ describe.skipIf(!enabled)(`live backend: ${backendName}`, () => {
     const answer = slack.posts[0]!.text;
     report("general", answer);
     expect(answer.length).toBeGreaterThan(100);
-    expect(answer).not.toContain("*Sources*");
+    expect(answer).not.toContain("archives/"); // no Slack citations for a general question
   }, 300_000);
 });
