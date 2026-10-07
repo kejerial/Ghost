@@ -15,12 +15,15 @@ import { PROFILE_PROMPT, type Profiles } from "../memory/profiles.js";
 import { describe as describeSchedule, type Scheduler } from "../schedule/scheduler.js";
 import { extractDirectives, type CanvasSpec, type Directive, type SlackActionSpec } from "./directives.js";
 import { buildPrompt, type PromptAttachment } from "./prompt.js";
-import { fetchWebImage, webImageDir } from "../util/web-image.js";
+import { fetchWebImage, fetchWebPage, webImageDir, type WebPage } from "../util/web-image.js";
 import { isCanvas, type Attachment, type FileReader, type SlackFile } from "../slack/files.js";
 
 /** At most this many files per answer, newest first, and at most this many of them as images. */
 const MAX_FILES = 6;
 const MAX_IMAGES = 4;
+/** Extra model passes for web pages and images, and pages opened per pass. */
+const MAX_WEB_ROUNDS = 2;
+const MAX_PAGES = 3;
 /** At most this many canvas tabs are read per answer. */
 const MAX_CANVASES = 4;
 /** Total extracted-text budget across all attachments. */
@@ -226,23 +229,39 @@ export class Ghost {
     let raw = await ask(built.prompt, images);
     let { text, directives } = extractDirectives(raw);
 
-    // The model asked to see web images: download them and ask once more with the images shown.
-    const looks = [...new Set(directives.flatMap((d) => (d.type === "look" ? [d.url] : [])))].slice(0, Math.max(0, MAX_IMAGES - images.length));
-    if (looks.length) {
-      const { dir, cleanup } = await webImageDir();
-      try {
-        const results = await Promise.all(
-          looks.map((url, i) => fetchWebImage(url, dir, i, this.deps.fetchImpl).then((path) => ({ url, path }), (error: unknown) => ({ url, error: error instanceof Error ? error.message : String(error) }))),
-        );
-        const shown = [...images];
-        const lines = results.map((r) => ("path" in r ? `image ${shown.push(r.path)}: ${r.url}` : `could not load ${r.url} (${r.error})`));
-        log.info("web images", { requested: looks.length, shown: shown.length - images.length });
-        const followUp = `${built.prompt}\n\n<web_images>\n${lines.join("\n")}\n</web_images>\nYou asked to see these web images. The ones that loaded are now shown to you, numbered after any attached images. Answer the question now, using what you see. Do not add <<look: >> again.`;
+    // The model can ask to open web pages and look at web images. Ghost fetches them and asks again,
+    // at most twice more, so it can open a page and then look at an image from it.
+    const fetched: string[] = [];
+    const shown = [...images];
+    const { dir, cleanup } = await webImageDir();
+    try {
+      for (let round = 0; round < MAX_WEB_ROUNDS; round++) {
+        const opens = [...new Set(directives.flatMap((d) => (d.type === "open" ? [d.url] : [])))].slice(0, MAX_PAGES);
+        const looks = [...new Set(directives.flatMap((d) => (d.type === "look" ? [d.url] : [])))].slice(0, Math.max(0, MAX_IMAGES - shown.length));
+        if (!opens.length && !looks.length) break;
+        const [pages, pictures] = await Promise.all([
+          Promise.all(opens.map((url) => fetchWebPage(url, this.deps.fetchImpl).then((page) => renderPage(page), (error: unknown) => `<web_page url="${url}">(could not open it: ${message(error)})</web_page>`))),
+          Promise.all(
+            looks.map((url, i) =>
+              fetchWebImage(url, dir, shown.length + i, this.deps.fetchImpl).then(
+                (path) => ({ url, path }),
+                (error: unknown) => ({ url, error: message(error) }),
+              ),
+            ),
+          ),
+        ]);
+        const imageLines = pictures.map((r) => ("path" in r ? `image ${shown.push(r.path)}: ${r.url}` : `could not load ${r.url} (${r.error})`));
+        fetched.push(...pages, ...(imageLines.length ? [`<web_images>\n${imageLines.join("\n")}\n</web_images>`] : []));
+        log.info("web fetch", { round, pages: opens.length, images: looks.length, shown: shown.length - images.length });
+        const last = round === MAX_WEB_ROUNDS - 1;
+        const followUp = `${built.prompt}\n\n${fetched.join("\n\n")}\n\nGhost fetched what you asked for above. Web images that loaded are shown to you, numbered after any attached images. ${
+          last ? "Answer the question now. Do not add <<open: >> or <<look: >> again." : "Answer now, or add <<look: URL>> for images you still need to see (for example the logo from a page's image list)."
+        }`;
         raw = await ask(followUp, shown);
         ({ text, directives } = extractDirectives(raw));
-      } finally {
-        await cleanup();
       }
+    } finally {
+      await cleanup();
     }
     const { notes, logins } =
       event.user && options.applyDirectives !== false
@@ -417,7 +436,7 @@ export class Ghost {
           await this.applyCanvas(d.spec, who.channelId, who.canvasIds ?? new Set());
         } else if (d.type === "slack") {
           await this.applySlack(d.spec, who);
-        } else if (d.type === "look") {
+        } else if (d.type === "look" || d.type === "open") {
           // Handled before the answer is posted.
         } else if (d.type === "cancel") {
           if (!(await scheduler?.cancel(who.userId, d.id))) notes.push(`⚠️ I couldn't find schedule #${d.id}.`);
@@ -553,4 +572,13 @@ function statusLine(api: SlackApi, channel: string, threadTs: string | undefined
       if (posted) await api.deleteMessage(channel, posted).catch((error) => log.warn("status delete failed", { channel, ts: posted, ...errorFields(error) }));
     },
   };
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function renderPage(page: WebPage): string {
+  const images = page.images.map((i) => `- ${i.url} (${i.label.replace(/"/g, "'")})`).join("\n");
+  return `<web_page url="${page.url}" title="${page.title.replace(/"/g, "'")}">\n${page.text}\n\nImages on this page:\n${images || "(none)"}\n</web_page>`;
 }

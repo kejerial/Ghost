@@ -336,4 +336,41 @@ describe("web images", () => {
     expect(backend.requests[1]!.prompt).toContain("image 1: https://93.184.216.34/logo.png");
     expect(slack.posts.at(-1)?.text).toBe("The logo is a blue whale.");
   });
+
+  it("opens a page the model asks for, then looks at an image listed on it", async () => {
+    const slack = new FakeSlack();
+    slack.addUser("UK", "Kevin");
+    slack.addChannel("CGEN", "general");
+    const store = memoryStore();
+    const html = '<html><head><title>Nara</title><link rel="icon" href="assets/mascot-cloud.png"></head><body><h1>Done by Nara</h1><img src="/assets/mascot-cloud.png" alt="Nara cloud"></body></html>';
+    const fetchImpl = (async (url: URL) =>
+      String(url).endsWith(".png")
+        ? new Response(new Uint8Array(PNG_1PX), { status: 200, headers: { "content-type": "image/png" } })
+        : new Response(html, { status: 200, headers: { "content-type": "text/html" } })) as unknown as typeof fetch;
+    const backend = new FakeBackend((request) => {
+      if (request.images?.length) return "It's a white cloud mascot.";
+      if (request.prompt.includes("<web_page")) return "<<look: https://93.184.216.34/assets/mascot-cloud.png>>";
+      return "<<open: https://93.184.216.34>>";
+    });
+    const ghost = new Ghost({
+      api: slack,
+      store,
+      users: new UserDirectory(slack, store),
+      retriever: new FtsRetriever(store),
+      backend,
+      limiter: new Limiter(2),
+      identity: { botUserId: BOT_USER, botId: BOT_ID, teamUrl: TEAM_URL },
+      contextChars: 24000,
+      modelTimeoutMs: 1000,
+      profiles: tempProfiles(),
+      fetchImpl,
+    });
+    await ghost.handleMention({ channel: "CGEN", ts: tsDaysAgo(0), user: "UK", text: "<@" + BOT_USER + "> what does the logo on 93.184.216.34 look like?" }, "channel");
+
+    expect(backend.requests).toHaveLength(3);
+    expect(backend.requests[1]!.prompt).toContain('<web_page url="https://93.184.216.34/" title="Nara">');
+    expect(backend.requests[1]!.prompt).toContain("- https://93.184.216.34/assets/mascot-cloud.png (icon)");
+    expect(backend.requests[2]!.images).toHaveLength(1);
+    expect(slack.posts.at(-1)?.text).toBe("It's a white cloud mascot.");
+  });
 });
