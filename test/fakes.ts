@@ -1,5 +1,6 @@
 import type { CompletionRequest, ModelBackend } from "../src/backend/types.js";
-import type { ChannelInfo, Page, SlackApi, SlackMessage } from "../src/slack/api.js";
+import type { CanvasChange, ChannelInfo, Page, SlackApi, SlackMessage } from "../src/slack/api.js";
+import type { SlackFile } from "../src/slack/files.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -135,6 +136,35 @@ export class FakeSlack implements SlackApi {
 
   async removeReaction(channel: string, ts: string, name: string) {
     this.reactions.push({ op: "remove", channel, ts, name });
+  }
+
+  canvasTabs = new Map<string, string[]>();
+  files = new Map<string, SlackFile>();
+  canvasEdits: Array<{ canvasId: string; change: CanvasChange }> = [];
+  canvasCreates: Array<{ channel: string; markdown: string; title?: string }> = [];
+  actions: Array<{ op: string; [key: string]: unknown }> = [];
+
+  async channelCanvasIds(channel: string) {
+    return this.canvasTabs.get(channel) ?? [];
+  }
+
+  async fileInfo(fileId: string) {
+    const f = this.files.get(fileId);
+    if (!f) throw new Error("file_not_found");
+    return f;
+  }
+
+  async editCanvas(canvasId: string, change: CanvasChange) {
+    this.canvasEdits.push({ canvasId, change });
+  }
+
+  async createChannelCanvas(channel: string, markdown: string, title?: string) {
+    this.canvasCreates.push({ channel, markdown, title });
+    return "FNEWCANVAS";
+  }
+
+  async deleteCanvas(canvasId: string) {
+    this.actions.push({ op: "deleteCanvas", canvasId });
   }
 
 }

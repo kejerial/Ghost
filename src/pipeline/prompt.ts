@@ -58,6 +58,17 @@ Attachments:
 - A file without "(in your message)" was shared earlier in the conversation. Assume "this", "the doc", or "the screenshot" means the newest relevant file.
 - If a file has a note saying it could not be read, say so in one line and help with what you have.
 
+Canvases:
+- Take an action only when the asker explicitly asks for it in their current message. Add one line per action. Then confirm in one line what you did.
+- Never say you cannot do something listed here. If an action fails, Ghost adds a note to your reply.
+- A <file> with canvas_id is a Slack canvas, shown as its current text. The canvas title is the file name. Canvases "from a canvas tab in this channel" are the channel's tabs; the asker may call one "my to-do list", "the planner", or "the doc".
+- <<canvas: {"id":"F…","action":"append","markdown":"…"}>>: "append" adds to the end, "prepend" adds to the start, "replace" rewrites the whole canvas.
+- For "replace", write the complete new canvas, keeping every part the asker did not ask to change. Prefer "append" or "prepend" when they are enough.
+- <<canvas: {"id":"F…","action":"rename","title":"Planner"}>> renames a canvas. <<canvas: {"id":"F…","action":"delete"}>> deletes one; use it only when the asker asks to delete or remove canvases, for example duplicates.
+- <<canvas: {"action":"create","title":"Planner","markdown":"…"}>> adds a new canvas tab to this channel. If a canvas that fits already exists, edit it instead of creating another one.
+- Canvas markdown: "#" headings, "-" bullets, "- [ ]" checklists, **bold**, and [text](url) links. Escape newlines as \n inside the JSON.
+- Do not paste the whole canvas back into Slack.
+
 Format (Slack):
 - Use *bold* sparingly, short bullet lists with "•" or "-", and no headings or tables.
 - Write people and channels as plain names, without Slack markup.
@@ -85,6 +96,8 @@ export interface PromptInput {
   connections?: { connected: string[]; needsLogin: string[]; available?: string[] };
   /** Files from the question and the conversation, newest first. */
   attachments?: PromptAttachment[];
+  /** Set when the conversation is about a canvas: whether this channel has a canvas tab. */
+  channelHasCanvas?: boolean;
 }
 
 export interface PromptAttachment {
@@ -96,6 +109,8 @@ export interface PromptAttachment {
   /** 1-based position among the images passed to the model. */
   imageNumber?: number;
   note?: string;
+  /** Set for a Slack canvas Ghost can edit. */
+  canvasId?: string;
 }
 
 export interface BuiltPrompt {
@@ -184,10 +199,12 @@ export function buildPrompt(input: PromptInput): BuiltPrompt {
       const where = a.current ? " (in your message)" : "";
       const shown = a.imageNumber ? `(shown to you as image ${a.imageNumber})` : "";
       const body = [shown, a.text ?? "", a.note ? `(note: ${a.note})` : ""].filter(Boolean).join("\n");
-      return `<file name="${a.name.replace(/"/g, "'")}" from="${a.from}"${where}>\n${body}\n</file>`;
+      const canvas = a.canvasId ? ` canvas_id="${a.canvasId}"` : "";
+      return `<file name="${a.name.replace(/"/g, "'")}" from="${a.from}"${canvas}${where}>\n${body}\n</file>`;
     };
     sections.push(`<attachments>\n${input.attachments.map(render).join("\n")}\n</attachments>`);
   }
+  if (input.channelHasCanvas === false) sections.push("<channel_canvas>This channel has no canvas tabs yet.</channel_canvas>");
   sections.push(`<question asker="${input.askerName}" channel="#${input.channelName}">\n${input.question}\n</question>`);
 
   return { system: SYSTEM_PROMPT, prompt: sections.join("\n\n"), sources };

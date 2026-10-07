@@ -19,6 +19,11 @@ export interface SlackMessage {
   blocks?: unknown[];
 }
 
+interface ChannelProperties {
+  canvas?: { file_id?: string };
+  tabs?: { type?: string; data?: { file_id?: string } }[];
+}
+
 export interface ChannelInfo {
   id: string;
   name: string;
@@ -52,7 +57,18 @@ export interface SlackApi {
   update(channelId: string, ts: string, text: string): Promise<void>;
   deleteMessage(channelId: string, ts: string): Promise<void>;
   removeReaction(channelId: string, ts: string, name: string): Promise<void>;
+  /** File IDs of the channel's canvas tabs, in tab order. */
+  channelCanvasIds(channelId: string): Promise<string[]>;
+  fileInfo(fileId: string): Promise<SlackFile>;
+  editCanvas(canvasId: string, change: CanvasChange): Promise<void>;
+  /** Add a new canvas tab to the channel. Returns the canvas ID. */
+  createChannelCanvas(channelId: string, markdown: string, title?: string): Promise<string>;
+  deleteCanvas(canvasId: string): Promise<void>;
 }
+
+export type CanvasChange =
+  | { operation: "insert_at_end" | "insert_at_start" | "replace"; markdown: string }
+  | { operation: "rename"; title: string };
 
 export function slackApiFrom(client: WebClient): SlackApi {
   return {
@@ -166,5 +182,35 @@ export function slackApiFrom(client: WebClient): SlackApi {
       await client.reactions.remove({ channel: channelId, timestamp: ts, name });
     },
 
+    async channelCanvasIds(channelId) {
+      const r = await client.conversations.info({ channel: channelId });
+      const props = (r.channel as { properties?: ChannelProperties } | undefined)?.properties;
+      // A channel can have several canvas tabs. Older channels have one, under "canvas".
+      const ids = (props?.tabs ?? []).filter((t) => t.type === "canvas").map((t) => t.data?.file_id);
+      return [...new Set([props?.canvas?.file_id, ...ids].filter((id): id is string => Boolean(id)))];
+    },
+
+    async fileInfo(fileId) {
+      const r = await client.files.info({ file: fileId });
+      return r.file as SlackFile;
+    },
+
+    async editCanvas(canvasId, change) {
+      const edit =
+        change.operation === "rename"
+          ? { operation: "rename" as const, title_content: { type: "markdown" as const, markdown: change.title } }
+          : { operation: change.operation, document_content: { type: "markdown" as const, markdown: change.markdown } };
+      // The SDK types do not list "rename" yet; the API accepts it.
+      await client.canvases.edit({ canvas_id: canvasId, changes: [edit] as Parameters<typeof client.canvases.edit>[0]["changes"] });
+    },
+
+    async createChannelCanvas(channelId, markdown, title) {
+      const r = await client.conversations.canvases.create({ channel_id: channelId, title, document_content: { type: "markdown", markdown } });
+      return r.canvas_id!;
+    },
+
+    async deleteCanvas(canvasId) {
+      await client.canvases.delete({ canvas_id: canvasId });
+    },
   };
 }

@@ -18,6 +18,9 @@ export interface SlackFile {
   url_private?: string;
   is_external?: boolean;
   mode?: string;
+  /** Channels where the file is shared (from files.info). */
+  channels?: string[];
+  groups?: string[];
 }
 
 /** One attachment, ready for the prompt: extracted text, an image path, or a note on why it was skipped. */
@@ -27,6 +30,8 @@ export interface Attachment {
   text?: string;
   imagePath?: string;
   note?: string;
+  /** Set for a Slack canvas: Ghost can edit it with this file ID. */
+  canvasId?: string;
 }
 
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
@@ -38,9 +43,13 @@ const TEXT_TYPES = new Set(["text", "csv", "tsv", "markdown", "json", "javascrip
 const TEXTUTIL_TYPES = new Set(["docx", "doc", "rtf", "odt", "html", "webarchive"]);
 const IMAGE_TYPES = new Set(["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tiff", "bmp"]);
 
-const kind = (f: SlackFile): "image" | "pdf" | "xlsx" | "textutil" | "text" | "other" => {
+export const isCanvas = (f: SlackFile): boolean =>
+  (f.filetype ?? "").toLowerCase() === "quip" || (f.mimetype ?? "").toLowerCase() === "application/vnd.slack-docs";
+
+const kind = (f: SlackFile): "canvas" | "image" | "pdf" | "xlsx" | "textutil" | "text" | "other" => {
   const type = (f.filetype ?? "").toLowerCase();
   const mime = (f.mimetype ?? "").toLowerCase();
+  if (isCanvas(f)) return "canvas";
   if (IMAGE_TYPES.has(type) || mime.startsWith("image/")) return "image";
   if (type === "pdf" || mime === "application/pdf") return "pdf";
   if (type === "xlsx" || type === "xls" || mime.includes("spreadsheetml")) return "xlsx";
@@ -79,6 +88,8 @@ export class FileReader {
     if (k === "other") return { ...base, note: `unsupported file type (${file.filetype ?? file.mimetype ?? "unknown"})` };
     if ((file.size ?? 0) > MAX_DOWNLOAD_BYTES) return { ...base, note: "file is larger than 25 MB" };
 
+    if (k === "canvas") return this.readCanvas(file, base);
+
     const folder = join(this.dir, file.id.replace(/[^A-Za-z0-9]/g, ""));
     const cachedText = join(folder, "text.txt");
     const cachedImage = join(folder, "image.jpg");
@@ -103,13 +114,30 @@ export class FileReader {
     }
   }
 
+  /** Canvases change, so Ghost reads them fresh every time and never caches them. */
+  private async readCanvas(file: SlackFile, base: Attachment): Promise<Attachment> {
+    const folder = join(this.dir, `canvas-${file.id.replace(/[^A-Za-z0-9]/g, "")}-${process.pid}-${Date.now()}`);
+    try {
+      await mkdir(folder, { recursive: true });
+      const html = join(folder, "canvas.html");
+      await this.download(file, html);
+      const { stdout } = await exec("textutil", ["-format", "html", "-inputencoding", "UTF-8", "-convert", "txt", "-stdout", html], { maxBuffer: 50 * 1024 * 1024 });
+      return { ...base, canvasId: file.id, text: clip(stdout) || "(empty canvas)" };
+    } catch (error) {
+      log.warn("canvas read failed", { file: file.id, ...errorFields(error) });
+      return { ...base, canvasId: file.id, note: `could not read the canvas (${error instanceof Error ? error.message : String(error)})` };
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  }
+
   private async download(file: SlackFile, path: string): Promise<void> {
     const url = file.url_private_download ?? file.url_private;
     if (!url) throw new Error("no download URL");
     const response = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${this.token}` } });
     if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`);
     // Without files:read, Slack answers with its HTML sign-in page instead of the file.
-    if ((response.headers.get("content-type") ?? "").includes("text/html") && kind(file) !== "text" && kind(file) !== "textutil") {
+    if ((response.headers.get("content-type") ?? "").includes("text/html") && !["text", "textutil", "canvas"].includes(kind(file))) {
       throw new Error("Slack returned a web page instead of the file; the app needs the files:read scope");
     }
     await writeFile(path, Buffer.from(await response.arrayBuffer()));

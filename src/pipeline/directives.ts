@@ -5,6 +5,7 @@
  *   <<schedule: {"kind":"reminder","text":"Email the principal","at":"2026-10-06T09:00:00-04:00"}>>
  *   <<cancel: 12>>
  *   <<connect: linear>>   (open the sign-in page for a connection on the owner's Mac)
+ *   <<canvas: {"id":"F123","action":"append","markdown":"## Notes\n- item"}>>
  * Ghost applies them and removes them from the posted text.
  */
 
@@ -17,16 +18,25 @@ export interface ScheduleSpec {
   cron?: string;
 }
 
+export type CanvasSpec =
+  /** A new canvas tab in this channel. */
+  | { action: "create"; title?: string; markdown: string }
+  | { action: "append" | "prepend" | "replace"; id: string; markdown: string }
+  | { action: "rename"; id: string; title: string }
+  | { action: "delete"; id: string };
+
+
 export type Directive =
   | { type: "remember"; text: string }
   | { type: "forget"; text: string }
   | { type: "schedule"; spec: ScheduleSpec }
   | { type: "cancel"; id: number }
   | { type: "connect"; name: string }
+  | { type: "canvas"; spec: CanvasSpec }
   | { type: "invalid"; raw: string; reason: string };
 
 /** A directive ends at ">>" followed by the end of a line, so ">>" inside a value does not cut it short. */
-const PATTERN = /<<\s*(remember|forget|schedule|cancel|connect)\s*:\s*([\s\S]*?)>>(?=[ \t]*(?:\r?\n|$))/gi;
+const PATTERN = /<<\s*(remember|forget|schedule|cancel|connect|canvas)\s*:\s*([\s\S]*?)>>(?=[ \t]*(?:\r?\n|$))/gi;
 
 export function extractDirectives(modelText: string): { text: string; directives: Directive[] } {
   const directives: Directive[] = [];
@@ -48,6 +58,14 @@ function parse(name: string, body: string, raw: string): Directive {
     const id = Number(body.replace(/^#/, ""));
     return Number.isInteger(id) && id > 0 ? { type: "cancel", id } : { type: "invalid", raw, reason: "bad id" };
   }
+  if (name === "canvas") {
+    try {
+      const spec = JSON.parse(body) as Record<string, unknown>;
+      return { type: "canvas", spec: canvasSpec(spec) };
+    } catch (error) {
+      return { type: "invalid", raw, reason: error instanceof Error ? error.message : String(error) };
+    }
+  }
   try {
     const spec = JSON.parse(body) as Partial<ScheduleSpec>;
     if (spec.kind !== "reminder" && spec.kind !== "task") throw new Error("kind must be reminder or task");
@@ -58,3 +76,33 @@ function parse(name: string, body: string, raw: string): Directive {
     return { type: "invalid", raw, reason: error instanceof Error ? error.message : String(error) };
   }
 }
+
+const text = (spec: Record<string, unknown>, key: string): string => {
+  const value = spec[key];
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${key} is required`);
+  return value.trim();
+};
+
+const canvasId = (spec: Record<string, unknown>): string => {
+  const id = text(spec, "id");
+  if (!/^F[A-Z0-9]+$/.test(id)) throw new Error("bad canvas id");
+  return id;
+};
+
+function canvasSpec(spec: Record<string, unknown>): CanvasSpec {
+  switch (spec.action) {
+    case "create":
+      return { action: "create", title: typeof spec.title === "string" && spec.title.trim() ? spec.title.trim() : undefined, markdown: text(spec, "markdown") };
+    case "append":
+    case "prepend":
+    case "replace":
+      return { action: spec.action, id: canvasId(spec), markdown: text(spec, "markdown") };
+    case "rename":
+      return { action: "rename", id: canvasId(spec), title: text(spec, "title") };
+    case "delete":
+      return { action: "delete", id: canvasId(spec) };
+    default:
+      throw new Error("action must be create, append, prepend, replace, rename, or delete");
+  }
+}
+

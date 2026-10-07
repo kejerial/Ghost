@@ -194,3 +194,60 @@ describe("Ghost with attachments", () => {
     expect(slack.posts.at(-1)?.text).toBe("The scan shows a receipt.");
   });
 });
+
+describe("Ghost with canvases", () => {
+  const setup = (reply: string) => {
+    const slack = new FakeSlack();
+    slack.addUser("UK", "Kevin");
+    slack.addChannel("CGEN", "general");
+    const canvas = file("FCANVAS", "quip", { name: "Trip plan", url_private: "https://files.slack.com/FCANVAS", url_private_download: undefined });
+    slack.canvasTabs.set("CGEN", ["FCANVAS"]);
+    slack.files.set("FCANVAS", canvas);
+    const store = memoryStore();
+    const backend = new FakeBackend(() => reply);
+    const ghost = new Ghost({
+      api: slack,
+      store,
+      users: new UserDirectory(slack, store),
+      retriever: new FtsRetriever(store),
+      backend,
+      limiter: new Limiter(2),
+      identity: { botUserId: BOT_USER, botId: BOT_ID, teamUrl: TEAM_URL },
+      contextChars: 24000,
+      modelTimeoutMs: 1000,
+      profiles: tempProfiles(),
+      files: new FileReader(
+        "xoxb-test",
+        mkdtempSync(join(tmpdir(), "ghost-files-")),
+        fakeFetch({ "https://files.slack.com/FCANVAS": { body: Buffer.from("<h1>Trip</h1><ul><li>Book car</li></ul>"), type: "text/html" } }),
+      ),
+    });
+    return { slack, backend, ghost };
+  };
+
+  it("reads the channel canvas fresh and applies an edit to it", async () => {
+    const { slack, backend, ghost } = setup('Added it.\n<<canvas: {"id":"FCANVAS","action":"append","markdown":"- Pick up car Oct 13"}>>');
+    const ts = tsDaysAgo(0);
+    await ghost.handleMention({ channel: "CGEN", ts, user: "UK", text: "<@" + BOT_USER + "> add the car pickup to my to do list" }, "channel");
+
+    const prompt = backend.requests[0]!.prompt;
+    expect(prompt).toMatch(/<file name="Trip plan" from="a canvas tab in this channel" canvas_id="FCANVAS">\nTrip[\s\S]*Book car/);
+    expect(slack.canvasEdits).toEqual([{ canvasId: "FCANVAS", change: { operation: "insert_at_end", markdown: "- Pick up car Oct 13" } }]);
+    expect(slack.posts.at(-1)?.text).toBe("Added it.");
+  });
+
+  it("refuses to edit a canvas it did not read in this channel", async () => {
+    const { slack, ghost } = setup('Done.\n<<canvas: {"id":"FOTHER","action":"replace","markdown":"# gone"}>>');
+    await ghost.handleMention({ channel: "CGEN", ts: tsDaysAgo(0), user: "UK", text: "<@" + BOT_USER + "> clear the canvas" }, "channel");
+    expect(slack.canvasEdits).toEqual([]);
+    expect(slack.posts.at(-1)?.text).toContain("I can only change a canvas from this channel that I have read");
+  });
+
+  it("renames and deletes canvases it read", async () => {
+    const { slack, ghost } = setup('Done.\n<<canvas: {"id":"FCANVAS","action":"rename","title":"planner"}>>\n<<canvas: {"id":"FCANVAS","action":"delete"}>>');
+    await ghost.handleMention({ channel: "CGEN", ts: tsDaysAgo(0), user: "UK", text: "<@" + BOT_USER + "> rename the canvas" }, "channel");
+    expect(slack.canvasEdits).toEqual([{ canvasId: "FCANVAS", change: { operation: "rename", title: "planner" } }]);
+    expect(slack.actions).toEqual([{ op: "deleteCanvas", canvasId: "FCANVAS" }]);
+  });
+});
+

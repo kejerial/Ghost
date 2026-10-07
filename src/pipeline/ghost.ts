@@ -13,13 +13,15 @@ import { pickConnections } from "../integrations/router.js";
 import type { ProgressStep } from "../backend/types.js";
 import { PROFILE_PROMPT, type Profiles } from "../memory/profiles.js";
 import { describe as describeSchedule, type Scheduler } from "../schedule/scheduler.js";
-import { extractDirectives, type Directive } from "./directives.js";
+import { extractDirectives, type CanvasSpec, type Directive } from "./directives.js";
 import { buildPrompt, type PromptAttachment } from "./prompt.js";
-import type { Attachment, FileReader, SlackFile } from "../slack/files.js";
+import { isCanvas, type Attachment, type FileReader, type SlackFile } from "../slack/files.js";
 
 /** At most this many files per answer, newest first, and at most this many of them as images. */
 const MAX_FILES = 6;
 const MAX_IMAGES = 4;
+/** At most this many canvas tabs are read per answer. */
+const MAX_CANVASES = 4;
 /** Total extracted-text budget across all attachments. */
 const MAX_ATTACHMENT_CHARS = 40000;
 const FILE_ONLY_QUESTION = "(No message text. Look at the attached file(s) and respond helpfully: say what it is and what stands out.)";
@@ -182,7 +184,12 @@ export class Ghost {
 
     const retrieved = retriever.search({ question, channelId: event.channel, exclude });
     const currentFiles = event.files ?? thread.find((m) => m.ts === event.ts)?.files ?? [];
-    const { attachments, images } = await this.readAttachments(currentFiles, askerName, [...threadContext, ...recent]);
+    const conversation = [...threadContext, ...recent];
+    // Attach only the connections this conversation needs; each one adds start-up time to the call.
+    const routingText = [question, ...conversation.slice(-6).map((m) => m.text)].join("\n");
+    // Always load the channel's canvases: people call them "my to-do list" or "the planner", not "canvas".
+    const channelCanvases = await this.channelCanvases(event.channel);
+    const { attachments, images, canvasIds } = await this.readAttachments(currentFiles, askerName, conversation, channelCanvases ?? []);
     const built = buildPrompt({
       question,
       askerName,
@@ -200,11 +207,10 @@ export class Ghost {
         ? { connected: connections.connected, needsLogin: connections.needsLogin, available: connections.availableApps }
         : undefined,
       attachments,
+      channelHasCanvas: channelCanvases ? channelCanvases.length > 0 : undefined,
     });
     log.debug("prompt built", { chars: built.prompt.length, sources: built.sources.length, retrieved: retrieved.length });
 
-    // Attach only the connections this conversation needs; each one adds start-up time to the call.
-    const routingText = [question, ...[...threadContext, ...recent].slice(-6).map((m) => m.text)].join("\n");
     const attach = connections
       ? [...new Set([...pickConnections(connections.connected, routingText), ...(options.forceConnections ?? [])])]
       : undefined;
@@ -222,7 +228,7 @@ export class Ghost {
     const { text, directives } = extractDirectives(raw);
     const { notes, logins } =
       event.user && options.applyDirectives !== false
-        ? await this.apply(directives, { userId: event.user, name: askerName, channelId: event.channel, tz: timezone ?? "UTC" })
+        ? await this.apply(directives, { userId: event.user, name: askerName, channelId: event.channel, tz: timezone ?? "UTC", canvasIds })
         : { notes: [], logins: [] };
     const rendered = renderAnswer(text, built.sources);
     const footer = notes.length ? `\n\n${notes.map((n) => `_${n}_`).join("\n")}` : "";
@@ -237,15 +243,17 @@ export class Ghost {
     current: SlackFile[],
     askerName: string,
     conversation: ContextMessage[],
-  ): Promise<{ attachments: PromptAttachment[]; images: string[] }> {
+    channelCanvases: SlackFile[] = [],
+  ): Promise<{ attachments: PromptAttachment[]; images: string[]; canvasIds: Set<string> }> {
     const candidates: { file: SlackFile; from: string; current: boolean }[] = current.map((file) => ({ file, from: askerName, current: true }));
+    candidates.unshift(...channelCanvases.map((file) => ({ file, from: "a canvas tab in this channel", current: false })));
     for (const m of [...conversation].sort((a, b) => Number(b.ts) - Number(a.ts))) {
       if (m.isGhost) continue;
       for (const file of m.files ?? []) candidates.push({ file, from: m.userName, current: false });
     }
     const seen = new Set<string>();
     const chosen = candidates.filter((c) => !seen.has(c.file.id) && seen.add(c.file.id)).slice(0, MAX_FILES);
-    if (!chosen.length) return { attachments: [], images: [] };
+    if (!chosen.length) return { attachments: [], images: [], canvasIds: new Set() };
     const reader = this.deps.files;
     const read: Attachment[] = await Promise.all(
       chosen.map((c) => (reader ? reader.read(c.file) : Promise.resolve({ id: c.file.id, name: c.file.name ?? c.file.id, note: "file reading is off" }))),
@@ -255,7 +263,7 @@ export class Ghost {
     const images: string[] = [];
     let chars = 0;
     read.forEach((a, i) => {
-      const out: PromptAttachment = { name: a.name, from: chosen[i]!.from, current: chosen[i]!.current, note: a.note };
+      const out: PromptAttachment = { name: a.name, from: chosen[i]!.from, current: chosen[i]!.current, note: a.note, canvasId: a.canvasId };
       if (a.imagePath) {
         if (images.length < MAX_IMAGES) out.imageNumber = images.push(a.imagePath);
         else out.note = "image not shown: too many images in this conversation";
@@ -272,13 +280,44 @@ export class Ghost {
       attachments.push(out);
     });
     log.info("attachments read", { files: attachments.length, images: images.length, chars, notes: attachments.filter((a) => a.note).map((a) => a.note) });
-    return { attachments, images };
+    // Ghost edits only canvases it read in this channel's conversation.
+    const canvasIds = new Set(chosen.filter((c) => isCanvas(c.file)).map((c) => c.file.id));
+    return { attachments, images, canvasIds };
+  }
+
+  /** Ghost edits only canvases it read in this channel's conversation. */
+  private async applyCanvas(spec: CanvasSpec, channelId: string, canvasIds: Set<string>): Promise<void> {
+    const { api } = this.deps;
+    if (spec.action === "create") {
+      const id = await api.createChannelCanvas(channelId, spec.markdown, spec.title);
+      log.info("canvas created", { channel: channelId, canvas: id });
+      return;
+    }
+    if (!canvasIds.has(spec.id)) throw new Error("I can only change a canvas from this channel that I have read");
+    if (spec.action === "delete") await api.deleteCanvas(spec.id);
+    else if (spec.action === "rename") await api.editCanvas(spec.id, { operation: "rename", title: spec.title });
+    else {
+      const operation = spec.action === "append" ? "insert_at_end" : spec.action === "prepend" ? "insert_at_start" : "replace";
+      await api.editCanvas(spec.id, { operation, markdown: spec.markdown });
+    }
+    log.info("canvas changed", { canvas: spec.id, action: spec.action });
+  }
+
+  /** The channel's canvas tabs, with the details needed to download them. Undefined if the lookup failed. */
+  private async channelCanvases(channelId: string): Promise<SlackFile[] | undefined> {
+    try {
+      const ids = (await this.deps.api.channelCanvasIds(channelId)).slice(0, MAX_CANVASES);
+      return await Promise.all(ids.map((id) => this.deps.api.fileInfo(id)));
+    } catch (error) {
+      log.warn("channel canvas lookup failed", { channelId, ...errorFields(error) });
+      return undefined;
+    }
   }
 
   /** Apply the model's directives for this user. Returns notes for anything that failed. */
   private async apply(
     directives: Directive[],
-    who: { userId: string; name: string; channelId: string; tz: string },
+    who: { userId: string; name: string; channelId: string; tz: string; canvasIds?: Set<string> },
   ): Promise<{ notes: string[]; logins: string[] }> {
     const { profiles, scheduler } = this.deps;
     const notes: string[] = [];
@@ -294,11 +333,13 @@ export class Ghost {
         } else if (d.type === "connect") {
           if (!this.deps.connections) throw new Error("connections are off");
           logins.push(d.name);
+        } else if (d.type === "canvas") {
+          await this.applyCanvas(d.spec, who.channelId, who.canvasIds ?? new Set());
         } else if (d.type === "cancel") {
           if (!(await scheduler?.cancel(who.userId, d.id))) notes.push(`⚠️ I couldn't find schedule #${d.id}.`);
         } else {
           log.warn("invalid directive", { raw: d.raw, reason: d.reason });
-          notes.push(`⚠️ I couldn't set that up (${d.reason}). Try rephrasing the time.`);
+          notes.push(`⚠️ I couldn't do that (${d.reason}).`);
         }
       } catch (error) {
         log.warn("directive failed", { type: d.type, ...errorFields(error) });
