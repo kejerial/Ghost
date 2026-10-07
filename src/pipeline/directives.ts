@@ -6,6 +6,7 @@
  *   <<cancel: 12>>
  *   <<connect: linear>>   (open the sign-in page for a connection on the owner's Mac)
  *   <<canvas: {"id":"F123","action":"append","markdown":"## Notes\n- item"}>>
+ *   <<look: https://example.com/photo.jpg>>   (show the model a web image, then ask it again)
  *   <<slack: {"action":"pin","message":"S3"}>>   (pin, unpin, react, bookmark, topic, post, dm, invite, create_channel)
  * Ghost applies them and removes them from the posted text.
  */
@@ -44,12 +45,13 @@ export type Directive =
   | { type: "schedule"; spec: ScheduleSpec }
   | { type: "cancel"; id: number }
   | { type: "connect"; name: string }
+  | { type: "look"; url: string }
   | { type: "canvas"; spec: CanvasSpec }
   | { type: "slack"; spec: SlackActionSpec }
   | { type: "invalid"; raw: string; reason: string };
 
 /** A directive ends at ">>" followed by the end of a line, so ">>" inside a value does not cut it short. */
-const PATTERN = /<<\s*(remember|forget|schedule|cancel|connect|canvas|slack)\s*:\s*([\s\S]*?)>>(?=[ \t]*(?:\r?\n|$))/gi;
+const PATTERN = /<<\s*(remember|forget|schedule|cancel|connect|canvas|slack|look)\s*:\s*([\s\S]*?)>>(?=[ \t]*(?:\r?\n|$))/gi;
 
 export function extractDirectives(modelText: string): { text: string; directives: Directive[] } {
   const directives: Directive[] = [];
@@ -63,6 +65,9 @@ export function extractDirectives(modelText: string): { text: string; directives
 function parse(name: string, body: string, raw: string): Directive {
   if (name === "remember" || name === "forget") {
     return body ? { type: name, text: body } : { type: "invalid", raw, reason: "empty" };
+  }
+  if (name === "look") {
+    return /^https:\/\/\S+$/.test(body) ? { type: "look", url: body } : { type: "invalid", raw, reason: "look needs an https image URL" };
   }
   if (name === "connect") {
     return /^[A-Za-z0-9_-]+$/.test(body) ? { type: "connect", name: body } : { type: "invalid", raw, reason: "bad connection name" };

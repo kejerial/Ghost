@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import ExcelJS from "exceljs";
 import { FileReader, tableBlocksText, type SlackFile } from "../src/slack/files.js";
 import { Ghost, type GhostDeps } from "../src/pipeline/ghost.js";
+import { fetchWebImage, isPrivateAddress } from "../src/util/web-image.js";
 import { FtsRetriever } from "../src/retrieval/search.js";
 import { UserDirectory } from "../src/slack/users.js";
 import { Limiter } from "../src/util/limiter.js";
@@ -287,5 +288,52 @@ describe("Ghost channel controls", () => {
     expect(slack.posts).toContainEqual(expect.objectContaining({ channel: "D-UB", text: "Kevin asked me to share the pricing." }));
     expect(slack.actions.some((a) => a.op === "invite")).toBe(false);
     expect(slack.posts.at(-1)?.text).toContain('"Ana" matches 2 people');
+  });
+});
+
+describe("web images", () => {
+  it("treats loopback, private, and link-local addresses as local", () => {
+    for (const ip of ["127.0.0.1", "10.1.2.3", "192.168.1.5", "172.20.0.1", "169.254.169.254", "::1", "fd00::1", "::ffff:127.0.0.1"]) {
+      expect(isPrivateAddress(ip)).toBe(true);
+    }
+    expect(isPrivateAddress("93.184.216.34")).toBe(false);
+  });
+
+  it("refuses local and non-https URLs before any download", async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (url: URL) => { calls.push(String(url)); return new Response(""); }) as unknown as typeof fetch;
+    const dir = mkdtempSync(join(tmpdir(), "ghost-web-"));
+    await expect(fetchWebImage("https://localhost/x.png", dir, 0, fetchImpl)).rejects.toThrow("local address");
+    await expect(fetchWebImage("https://127.0.0.1/x.png", dir, 0, fetchImpl)).rejects.toThrow("local address");
+    await expect(fetchWebImage("http://93.184.216.34/x.png", dir, 0, fetchImpl)).rejects.toThrow("only https");
+    expect(calls).toEqual([]);
+  });
+
+  it("downloads an image the model asks to see and answers again with it shown", async () => {
+    const slack = new FakeSlack();
+    slack.addUser("UK", "Kevin");
+    slack.addChannel("CGEN", "general");
+    const store = memoryStore();
+    const backend = new FakeBackend((request) => (request.images?.length ? "The logo is a blue whale." : "<<look: https://93.184.216.34/logo.png>>"));
+    const fetchImpl = (async () => new Response(new Uint8Array(PNG_1PX), { status: 200, headers: { "content-type": "image/png" } })) as unknown as typeof fetch;
+    const ghost = new Ghost({
+      api: slack,
+      store,
+      users: new UserDirectory(slack, store),
+      retriever: new FtsRetriever(store),
+      backend,
+      limiter: new Limiter(2),
+      identity: { botUserId: BOT_USER, botId: BOT_ID, teamUrl: TEAM_URL },
+      contextChars: 24000,
+      modelTimeoutMs: 1000,
+      profiles: tempProfiles(),
+      fetchImpl,
+    });
+    await ghost.handleMention({ channel: "CGEN", ts: tsDaysAgo(0), user: "UK", text: "<@" + BOT_USER + "> what does their logo look like?" }, "channel");
+
+    expect(backend.requests).toHaveLength(2);
+    expect(backend.requests[1]!.images).toHaveLength(1);
+    expect(backend.requests[1]!.prompt).toContain("image 1: https://93.184.216.34/logo.png");
+    expect(slack.posts.at(-1)?.text).toBe("The logo is a blue whale.");
   });
 });

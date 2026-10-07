@@ -174,7 +174,7 @@ async function exists(path: string): Promise<boolean> {
 }
 
 /** Convert to JPEG with the long side at most 2000 px (also handles HEIC). */
-async function toJpeg(input: string, output: string): Promise<void> {
+export async function toJpeg(input: string, output: string): Promise<void> {
   await exec("sips", ["-s", "format", "jpeg", "-Z", String(IMAGE_MAX_PIXELS), input, "--out", output]);
 }
 

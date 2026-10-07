@@ -15,6 +15,7 @@ import { PROFILE_PROMPT, type Profiles } from "../memory/profiles.js";
 import { describe as describeSchedule, type Scheduler } from "../schedule/scheduler.js";
 import { extractDirectives, type CanvasSpec, type Directive, type SlackActionSpec } from "./directives.js";
 import { buildPrompt, type PromptAttachment } from "./prompt.js";
+import { fetchWebImage, webImageDir } from "../util/web-image.js";
 import { isCanvas, type Attachment, type FileReader, type SlackFile } from "../slack/files.js";
 
 /** At most this many files per answer, newest first, and at most this many of them as images. */
@@ -47,6 +48,8 @@ export interface GhostDeps {
   modelTimeoutMs: number;
   profiles: Profiles;
   connections?: Connections;
+  /** Downloads web images the model asks to see. Tests pass a fake. */
+  fetchImpl?: typeof fetch;
   /** Reads attachments. Without it, Ghost sees only file names. */
   files?: FileReader;
   /** Set after construction, because the scheduler runs tasks through this Ghost. */
@@ -216,17 +219,31 @@ export class Ghost {
       ? [...new Set([...pickConnections(connections.connected, routingText), ...(options.forceConnections ?? [])])]
       : undefined;
     log.debug("connections attached", { attach });
-    const raw = await limiter.run(() =>
-      backend.complete({
-        system: built.system,
-        prompt: built.prompt,
-        timeoutMs: this.deps.modelTimeoutMs,
-        connections: attach,
-        onProgress: options.onProgress,
-        images,
-      }),
-    );
-    const { text, directives } = extractDirectives(raw);
+    const ask = (prompt: string, shown: string[]) =>
+      limiter.run(() =>
+        backend.complete({ system: built.system, prompt, timeoutMs: this.deps.modelTimeoutMs, connections: attach, onProgress: options.onProgress, images: shown }),
+      );
+    let raw = await ask(built.prompt, images);
+    let { text, directives } = extractDirectives(raw);
+
+    // The model asked to see web images: download them and ask once more with the images shown.
+    const looks = [...new Set(directives.flatMap((d) => (d.type === "look" ? [d.url] : [])))].slice(0, Math.max(0, MAX_IMAGES - images.length));
+    if (looks.length) {
+      const { dir, cleanup } = await webImageDir();
+      try {
+        const results = await Promise.all(
+          looks.map((url, i) => fetchWebImage(url, dir, i, this.deps.fetchImpl).then((path) => ({ url, path }), (error: unknown) => ({ url, error: error instanceof Error ? error.message : String(error) }))),
+        );
+        const shown = [...images];
+        const lines = results.map((r) => ("path" in r ? `image ${shown.push(r.path)}: ${r.url}` : `could not load ${r.url} (${r.error})`));
+        log.info("web images", { requested: looks.length, shown: shown.length - images.length });
+        const followUp = `${built.prompt}\n\n<web_images>\n${lines.join("\n")}\n</web_images>\nYou asked to see these web images. The ones that loaded are now shown to you, numbered after any attached images. Answer the question now, using what you see. Do not add <<look: >> again.`;
+        raw = await ask(followUp, shown);
+        ({ text, directives } = extractDirectives(raw));
+      } finally {
+        await cleanup();
+      }
+    }
     const { notes, logins } =
       event.user && options.applyDirectives !== false
         ? await this.apply(directives, { userId: event.user, name: askerName, channelId: event.channel, tz: timezone ?? "UTC", canvasIds, sources: built.sources })
@@ -400,6 +417,8 @@ export class Ghost {
           await this.applyCanvas(d.spec, who.channelId, who.canvasIds ?? new Set());
         } else if (d.type === "slack") {
           await this.applySlack(d.spec, who);
+        } else if (d.type === "look") {
+          // Handled before the answer is posted.
         } else if (d.type === "cancel") {
           if (!(await scheduler?.cancel(who.userId, d.id))) notes.push(`⚠️ I couldn't find schedule #${d.id}.`);
         } else {
