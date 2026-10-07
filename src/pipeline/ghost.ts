@@ -123,6 +123,7 @@ export class Ghost {
 
     // A reaction shows that Ghost is working. The answer is then posted once, as a new message,
     // so the post-time safety flags (no unfurls, no parsing) apply to it. chat.update has no unfurl flag.
+    log.info("question received", { channel: event.channel, ts: event.ts });
     await api.addReaction(event.channel, event.ts, WORKING_REACTION).catch((error) => log.warn("addReaction failed", errorFields(error)));
     const status = statusLine(api, event.channel, replyThreadTs);
     try {
@@ -530,7 +531,7 @@ function statusLine(api: SlackApi, channel: string, threadTs: string | undefined
       await chain;
       const posted = ts;
       ts = undefined;
-      if (posted) await api.deleteMessage(channel, posted).catch(() => undefined);
+      if (posted) await api.deleteMessage(channel, posted).catch((error) => log.warn("status delete failed", { channel, ts: posted, ...errorFields(error) }));
     },
   };
 }
