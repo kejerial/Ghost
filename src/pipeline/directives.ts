@@ -6,6 +6,7 @@
  *   <<cancel: 12>>
  *   <<connect: linear>>   (open the sign-in page for a connection on the owner's Mac)
  *   <<canvas: {"id":"F123","action":"append","markdown":"## Notes\n- item"}>>
+ *   <<slack: {"action":"pin","message":"S3"}>>   (pin, unpin, react, bookmark, topic, post, dm, invite, create_channel)
  * Ghost applies them and removes them from the posted text.
  */
 
@@ -25,6 +26,17 @@ export type CanvasSpec =
   | { action: "rename"; id: string; title: string }
   | { action: "delete"; id: string };
 
+/** Channel actions. "message" is a source ID from the prompt, for example "S3". */
+export type SlackActionSpec =
+  | { action: "pin" | "unpin"; message: string }
+  | { action: "react"; message: string; emoji: string }
+  | { action: "bookmark"; title: string; url: string }
+  | { action: "topic"; text: string }
+  | { action: "post"; text: string }
+  /** "person" is a name as it appears in Slack; Ghost looks up the account. */
+  | { action: "dm"; person: string; text: string }
+  | { action: "invite"; person: string }
+  | { action: "create_channel"; name: string; private: boolean };
 
 export type Directive =
   | { type: "remember"; text: string }
@@ -33,10 +45,11 @@ export type Directive =
   | { type: "cancel"; id: number }
   | { type: "connect"; name: string }
   | { type: "canvas"; spec: CanvasSpec }
+  | { type: "slack"; spec: SlackActionSpec }
   | { type: "invalid"; raw: string; reason: string };
 
 /** A directive ends at ">>" followed by the end of a line, so ">>" inside a value does not cut it short. */
-const PATTERN = /<<\s*(remember|forget|schedule|cancel|connect|canvas)\s*:\s*([\s\S]*?)>>(?=[ \t]*(?:\r?\n|$))/gi;
+const PATTERN = /<<\s*(remember|forget|schedule|cancel|connect|canvas|slack)\s*:\s*([\s\S]*?)>>(?=[ \t]*(?:\r?\n|$))/gi;
 
 export function extractDirectives(modelText: string): { text: string; directives: Directive[] } {
   const directives: Directive[] = [];
@@ -58,10 +71,10 @@ function parse(name: string, body: string, raw: string): Directive {
     const id = Number(body.replace(/^#/, ""));
     return Number.isInteger(id) && id > 0 ? { type: "cancel", id } : { type: "invalid", raw, reason: "bad id" };
   }
-  if (name === "canvas") {
+  if (name === "canvas" || name === "slack") {
     try {
       const spec = JSON.parse(body) as Record<string, unknown>;
-      return { type: "canvas", spec: canvasSpec(spec) };
+      return name === "canvas" ? { type: "canvas", spec: canvasSpec(spec) } : { type: "slack", spec: slackSpec(spec) };
     } catch (error) {
       return { type: "invalid", raw, reason: error instanceof Error ? error.message : String(error) };
     }
@@ -106,3 +119,36 @@ function canvasSpec(spec: Record<string, unknown>): CanvasSpec {
   }
 }
 
+function slackSpec(spec: Record<string, unknown>): SlackActionSpec {
+  const message = () => {
+    const id = text(spec, "message");
+    if (!/^S\d+$/.test(id)) throw new Error("message must be a source ID like S3");
+    return id;
+  };
+  switch (spec.action) {
+    case "pin":
+    case "unpin":
+      return { action: spec.action, message: message() };
+    case "react":
+      return { action: "react", message: message(), emoji: text(spec, "emoji").replace(/^:|:$/g, "") };
+    case "bookmark": {
+      const url = text(spec, "url");
+      if (!/^https:\/\//.test(url)) throw new Error("bookmark url must start with https://");
+      return { action: "bookmark", title: text(spec, "title"), url };
+    }
+    case "topic":
+      return { action: "topic", text: text(spec, "text") };
+    case "post":
+      return { action: "post", text: text(spec, "text") };
+    case "dm":
+      return { action: "dm", person: text(spec, "person"), text: text(spec, "text") };
+    case "invite":
+      return { action: "invite", person: text(spec, "person") };
+    case "create_channel": {
+      const name = text(spec, "name").toLowerCase().replace(/^#/, "").replace(/[^a-z0-9_-]+/g, "-").slice(0, 80);
+      return { action: "create_channel", name, private: spec.private === true };
+    }
+    default:
+      throw new Error("action must be pin, unpin, react, bookmark, topic, post, dm, invite, or create_channel");
+  }
+}

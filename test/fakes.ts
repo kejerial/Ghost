@@ -143,6 +143,7 @@ export class FakeSlack implements SlackApi {
   canvasEdits: Array<{ canvasId: string; change: CanvasChange }> = [];
   canvasCreates: Array<{ channel: string; markdown: string; title?: string }> = [];
   actions: Array<{ op: string; [key: string]: unknown }> = [];
+  people_: { id: string; name: string; realName?: string }[] = [];
 
   async channelCanvasIds(channel: string) {
     return this.canvasTabs.get(channel) ?? [];
@@ -167,6 +168,38 @@ export class FakeSlack implements SlackApi {
     this.actions.push({ op: "deleteCanvas", canvasId });
   }
 
+  async pin(channel: string, ts: string) {
+    this.actions.push({ op: "pin", channel, ts });
+  }
+
+  async unpin(channel: string, ts: string) {
+    this.actions.push({ op: "unpin", channel, ts });
+  }
+
+  async addBookmark(channel: string, title: string, url: string) {
+    this.actions.push({ op: "bookmark", channel, title, url });
+  }
+
+  async setTopic(channel: string, topic: string) {
+    this.actions.push({ op: "topic", channel, topic });
+  }
+
+  async people() {
+    return this.people_;
+  }
+
+  async openDm(userId: string) {
+    return `D-${userId}`;
+  }
+
+  async invite(channel: string, userIds: string[]) {
+    this.actions.push({ op: "invite", channel, userIds });
+  }
+
+  async createChannel(name: string, isPrivate: boolean) {
+    this.actions.push({ op: "createChannel", name, isPrivate });
+    return "CNEW";
+  }
 }
 
 /** A backend that records the request and returns a scripted reply. */

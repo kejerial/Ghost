@@ -45,6 +45,9 @@ export interface CitableSource {
   id: string;
   url: string;
   label: string;
+  /** Where the message is, so Ghost can act on it (pin, react). */
+  channelId?: string;
+  ts?: string;
 }
 
 /**

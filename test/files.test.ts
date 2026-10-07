@@ -251,3 +251,41 @@ describe("Ghost with canvases", () => {
   });
 });
 
+describe("Ghost channel controls", () => {
+  it("pins and reacts to messages in this channel, DMs a teammate by name, and refuses ambiguous names", async () => {
+    const slack = new FakeSlack();
+    slack.addUser("UK", "Kevin");
+    slack.addUser("U1", "Ana");
+    slack.addChannel("CGEN", "general");
+    slack.people_ = [{ id: "UB", name: "ben", realName: "Ben Carter" }, { id: "UA", name: "Ana Lee" }, { id: "UA2", name: "Ana Park" }];
+    slack.say("CGEN", { ts: tsDaysAgo(0.1), user: "U1", text: "Pricing is $49 per seat" });
+    const store = memoryStore();
+    const reply = [
+      "Done.",
+      '<<slack: {"action":"pin","message":"S1"}>>',
+      '<<slack: {"action":"react","message":"S1","emoji":":white_check_mark:"}>>',
+      '<<slack: {"action":"dm","person":"Ben","text":"Kevin asked me to share the pricing."}>>',
+      '<<slack: {"action":"invite","person":"Ana"}>>',
+    ].join("\n");
+    const ghost = new Ghost({
+      api: slack,
+      store,
+      users: new UserDirectory(slack, store),
+      retriever: new FtsRetriever(store),
+      backend: new FakeBackend(() => reply),
+      limiter: new Limiter(2),
+      identity: { botUserId: BOT_USER, botId: BOT_ID, teamUrl: TEAM_URL },
+      contextChars: 24000,
+      modelTimeoutMs: 1000,
+      profiles: tempProfiles(),
+    });
+    await ghost.handleMention({ channel: "CGEN", ts: tsDaysAgo(0), user: "UK", text: "<@" + BOT_USER + "> pin that and tell Ben" }, "channel");
+
+    const pinned = slack.actions.find((a) => a.op === "pin");
+    expect(pinned).toMatchObject({ channel: "CGEN" });
+    expect(slack.reactions).toContainEqual(expect.objectContaining({ op: "add", name: "white_check_mark", ts: pinned!.ts }));
+    expect(slack.posts).toContainEqual(expect.objectContaining({ channel: "D-UB", text: "Kevin asked me to share the pricing." }));
+    expect(slack.actions.some((a) => a.op === "invite")).toBe(false);
+    expect(slack.posts.at(-1)?.text).toContain('"Ana" matches 2 people');
+  });
+});

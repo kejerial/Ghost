@@ -64,6 +64,17 @@ export interface SlackApi {
   /** Add a new canvas tab to the channel. Returns the canvas ID. */
   createChannelCanvas(channelId: string, markdown: string, title?: string): Promise<string>;
   deleteCanvas(canvasId: string): Promise<void>;
+  pin(channelId: string, ts: string): Promise<void>;
+  unpin(channelId: string, ts: string): Promise<void>;
+  addBookmark(channelId: string, title: string, url: string): Promise<void>;
+  setTopic(channelId: string, topic: string): Promise<void>;
+  /** Every active person in the workspace (no bots, no deactivated accounts). */
+  people(): Promise<{ id: string; name: string; realName?: string }[]>;
+  /** Open a direct message with a person. Returns the DM channel ID. */
+  openDm(userId: string): Promise<string>;
+  invite(channelId: string, userIds: string[]): Promise<void>;
+  /** Returns the new channel ID. */
+  createChannel(name: string, isPrivate: boolean): Promise<string>;
 }
 
 export type CanvasChange =
@@ -212,5 +223,50 @@ export function slackApiFrom(client: WebClient): SlackApi {
     async deleteCanvas(canvasId) {
       await client.canvases.delete({ canvas_id: canvasId });
     },
+
+    async pin(channelId, ts) {
+      await client.pins.add({ channel: channelId, timestamp: ts });
+    },
+
+    async unpin(channelId, ts) {
+      await client.pins.remove({ channel: channelId, timestamp: ts });
+    },
+
+    async addBookmark(channelId, title, url) {
+      await client.bookmarks.add({ channel_id: channelId, title, type: "link", link: url });
+    },
+
+    async setTopic(channelId, topic) {
+      await client.conversations.setTopic({ channel: channelId, topic });
+    },
+
+    async people() {
+      const people: { id: string; name: string; realName?: string }[] = [];
+      let cursor: string | undefined;
+      do {
+        const r = await client.users.list({ limit: 200, cursor });
+        for (const u of r.members ?? []) {
+          if (!u.id || u.deleted || u.is_bot || u.id === "USLACKBOT") continue;
+          people.push({ id: u.id, name: u.profile?.display_name || u.real_name || u.name || u.id, realName: u.profile?.real_name || u.real_name });
+        }
+        cursor = r.response_metadata?.next_cursor || undefined;
+      } while (cursor);
+      return people;
+    },
+
+    async openDm(userId) {
+      const r = await client.conversations.open({ users: userId });
+      return r.channel!.id!;
+    },
+
+    async invite(channelId, userIds) {
+      await client.conversations.invite({ channel: channelId, users: userIds.join(",") });
+    },
+
+    async createChannel(name, isPrivate) {
+      const r = await client.conversations.create({ name, is_private: isPrivate });
+      return r.channel!.id!;
+    },
+
   };
 }

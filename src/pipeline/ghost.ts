@@ -2,7 +2,7 @@ import type { ModelBackend } from "../backend/types.js";
 import { errorFields, log } from "../log.js";
 import type { Retriever } from "../retrieval/search.js";
 import type { SlackApi, SlackMessage } from "../slack/api.js";
-import { cleanSlackText, renderAnswer, stripMention } from "../slack/text.js";
+import { cleanSlackText, renderAnswer, stripMention, type CitableSource } from "../slack/text.js";
 import type { UserDirectory } from "../slack/users.js";
 import type { Store } from "../store/db.js";
 import type { Identity } from "../store/sync.js";
@@ -13,7 +13,7 @@ import { pickConnections } from "../integrations/router.js";
 import type { ProgressStep } from "../backend/types.js";
 import { PROFILE_PROMPT, type Profiles } from "../memory/profiles.js";
 import { describe as describeSchedule, type Scheduler } from "../schedule/scheduler.js";
-import { extractDirectives, type CanvasSpec, type Directive } from "./directives.js";
+import { extractDirectives, type CanvasSpec, type Directive, type SlackActionSpec } from "./directives.js";
 import { buildPrompt, type PromptAttachment } from "./prompt.js";
 import { isCanvas, type Attachment, type FileReader, type SlackFile } from "../slack/files.js";
 
@@ -228,7 +228,7 @@ export class Ghost {
     const { text, directives } = extractDirectives(raw);
     const { notes, logins } =
       event.user && options.applyDirectives !== false
-        ? await this.apply(directives, { userId: event.user, name: askerName, channelId: event.channel, tz: timezone ?? "UTC", canvasIds })
+        ? await this.apply(directives, { userId: event.user, name: askerName, channelId: event.channel, tz: timezone ?? "UTC", canvasIds, sources: built.sources })
         : { notes: [], logins: [] };
     const rendered = renderAnswer(text, built.sources);
     const footer = notes.length ? `\n\n${notes.map((n) => `_${n}_`).join("\n")}` : "";
@@ -303,6 +303,68 @@ export class Ghost {
     log.info("canvas changed", { canvas: spec.id, action: spec.action });
   }
 
+  /** Channel actions. Message actions work only on messages in the asker's channel. */
+  private async applySlack(spec: SlackActionSpec, who: { userId: string; channelId: string; sources?: CitableSource[] }): Promise<void> {
+    const { api } = this.deps;
+    const message = (id: string) => {
+      const source = who.sources?.find((s) => s.id === id);
+      if (!source?.ts || source.channelId !== who.channelId) throw new Error(`I can only act on messages in this channel (${id})`);
+      return source.ts;
+    };
+    switch (spec.action) {
+      case "pin":
+        await api.pin(who.channelId, message(spec.message));
+        break;
+      case "unpin":
+        await api.unpin(who.channelId, message(spec.message));
+        break;
+      case "react":
+        await api.addReaction(who.channelId, message(spec.message), spec.emoji);
+        break;
+      case "bookmark":
+        await api.addBookmark(who.channelId, spec.title, spec.url);
+        break;
+      case "topic":
+        await api.setTopic(who.channelId, spec.text);
+        break;
+      case "post":
+        await api.post(who.channelId, undefined, renderAnswer(spec.text, []).text);
+        break;
+      case "dm": {
+        const person = await this.findPerson(spec.person);
+        await api.post(await api.openDm(person.id), undefined, renderAnswer(spec.text, []).text);
+        break;
+      }
+      case "invite":
+        await api.invite(who.channelId, [(await this.findPerson(spec.person)).id]);
+        break;
+      case "create_channel": {
+        const id = await api.createChannel(spec.name, spec.private);
+        // Ghost creates the channel, so it adds the asker; otherwise only Ghost would be in it.
+        await api.invite(id, [who.userId]);
+        break;
+      }
+    }
+    log.info("slack action", { action: spec.action, channel: who.channelId });
+  }
+
+  /** Match a name to exactly one person: display name, full name, or first name. */
+  private async findPerson(name: string): Promise<{ id: string; name: string }> {
+    const wanted = name.toLowerCase().replace(/^@/, "").trim();
+    const people = await this.deps.api.people();
+    const names = (p: { name: string; realName?: string }) => [p.name, p.realName].filter(Boolean).map((n) => n!.toLowerCase());
+    for (const test of [
+      (n: string) => n === wanted,
+      (n: string) => n.split(/\s+/)[0] === wanted,
+      (n: string) => n.includes(wanted),
+    ]) {
+      const hits = people.filter((p) => names(p).some(test));
+      if (hits.length === 1) return hits[0]!;
+      if (hits.length > 1) throw new Error(`"${name}" matches ${hits.length} people (${hits.slice(0, 4).map((p) => p.realName ?? p.name).join(", ")}); use a full name`);
+    }
+    throw new Error(`I couldn't find anyone named "${name}"`);
+  }
+
   /** The channel's canvas tabs, with the details needed to download them. Undefined if the lookup failed. */
   private async channelCanvases(channelId: string): Promise<SlackFile[] | undefined> {
     try {
@@ -317,7 +379,7 @@ export class Ghost {
   /** Apply the model's directives for this user. Returns notes for anything that failed. */
   private async apply(
     directives: Directive[],
-    who: { userId: string; name: string; channelId: string; tz: string; canvasIds?: Set<string> },
+    who: { userId: string; name: string; channelId: string; tz: string; canvasIds?: Set<string>; sources?: CitableSource[] },
   ): Promise<{ notes: string[]; logins: string[] }> {
     const { profiles, scheduler } = this.deps;
     const notes: string[] = [];
@@ -335,6 +397,8 @@ export class Ghost {
           logins.push(d.name);
         } else if (d.type === "canvas") {
           await this.applyCanvas(d.spec, who.channelId, who.canvasIds ?? new Set());
+        } else if (d.type === "slack") {
+          await this.applySlack(d.spec, who);
         } else if (d.type === "cancel") {
           if (!(await scheduler?.cancel(who.userId, d.id))) notes.push(`⚠️ I couldn't find schedule #${d.id}.`);
         } else {
